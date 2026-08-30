@@ -1,0 +1,63 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Install Rust stable
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.1
+
+      - name: Test workspace through package interface
+        run: pnpm test
+
+      - name: Build release executable through package interface
+        run: pnpm build
+
+      - name: Test Rust workspace
+        run: cargo test --workspace
+
+      - name: Check ArkLog package
+        run: cargo check -p arklog
+
+      - name: Prepare Windows executable
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/arklog.exe dist/ArkLog-windows-x86_64.exe
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ArkLog-windows-x86_64
+          path: dist/ArkLog-windows-x86_64.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$env:GITHUB_REF_NAME"
+          "dist/ArkLog-windows-x86_64.exe"
+          --verify-tag
+          --generate-notes
+          --title "ArkLog $env:GITHUB_REF_NAME"
