@@ -25,6 +25,23 @@ fn starts_hilog_for_the_selected_device_and_stops_it() {
 }
 
 #[test]
+fn stop_waits_for_the_final_partial_batch_to_be_delivered() {
+    let sink = Arc::new(RecordingSink::default());
+    let runtime = DeviceLogRuntime::new(fixture_path().to_string_lossy());
+    let stream = runtime
+        .start_stream("TAIL-01", sink.clone())
+        .expect("start stream");
+
+    assert_eq!(sink.wait_for_lines(50).len(), 50);
+    runtime.stop_stream(&stream.stream_id).expect("stop stream");
+
+    assert!(sink
+        .snapshot()
+        .iter()
+        .any(|line| line == "tail-before-stop"));
+}
+
+#[test]
 fn rejects_an_empty_device_id_before_launching_hdc() {
     let runtime = DeviceLogRuntime::new("hdc");
 
@@ -53,6 +70,16 @@ impl RecordingSink {
             assert!(!result.timed_out(), "timed out waiting for log output");
         }
         guard.iter().flat_map(|batch| batch.lines.clone()).collect()
+    }
+
+    fn snapshot(&self) -> Vec<String> {
+        self.batches
+            .0
+            .lock()
+            .expect("batches")
+            .iter()
+            .flat_map(|batch| batch.lines.clone())
+            .collect()
     }
 }
 

@@ -1,0 +1,15 @@
+[package]
+name = "arklog"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+
+[dependencies]
+arklog-core = { path = "../arklog-core" }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+regex = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]

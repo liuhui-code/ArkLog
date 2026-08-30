@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 use serde::Serialize;
 
@@ -18,7 +19,12 @@ pub struct DeviceLogStreamSummary {
 pub struct DeviceLogRuntime {
     executable: String,
     next_stream_id: AtomicU64,
-    children: Mutex<HashMap<String, Child>>,
+    streams: Mutex<HashMap<String, ActiveStream>>,
+}
+
+struct ActiveStream {
+    child: Child,
+    worker: JoinHandle<()>,
 }
 
 impl DeviceLogRuntime {
@@ -26,7 +32,7 @@ impl DeviceLogRuntime {
         Self {
             executable: executable.into(),
             next_stream_id: AtomicU64::new(1),
-            children: Mutex::new(HashMap::new()),
+            streams: Mutex::new(HashMap::new()),
         }
     }
 
@@ -58,11 +64,11 @@ impl DeviceLogRuntime {
             .take()
             .ok_or_else(|| "HDC HiLog stdout was unavailable".to_string())?;
 
-        spawn_log_reader(stream_id.clone(), device_id.to_string(), stdout, sink);
-        self.children
+        let worker = spawn_log_reader(stream_id.clone(), device_id.to_string(), stdout, sink);
+        self.streams
             .lock()
             .map_err(|_| "Device log runtime lock was poisoned".to_string())?
-            .insert(stream_id.clone(), child);
+            .insert(stream_id.clone(), ActiveStream { child, worker });
 
         Ok(DeviceLogStreamSummary {
             stream_id,
@@ -72,28 +78,35 @@ impl DeviceLogRuntime {
     }
 
     pub fn stop_stream(&self, stream_id: &str) -> Result<(), String> {
-        let mut child = self
-            .children
+        let mut stream = self
+            .streams
             .lock()
             .map_err(|_| "Device log runtime lock was poisoned".to_string())?
             .remove(stream_id)
             .ok_or_else(|| format!("Unknown device log stream: {stream_id}"))?;
-        child
+        stream
+            .child
             .kill()
             .map_err(|error| format!("Failed to stop HDC HiLog: {error}"))?;
-        child
+        stream
+            .child
             .wait()
             .map_err(|error| format!("Failed to reap HDC HiLog: {error}"))?;
+        stream
+            .worker
+            .join()
+            .map_err(|_| "Device log worker panicked while stopping".to_string())?;
         Ok(())
     }
 }
 
 impl Drop for DeviceLogRuntime {
     fn drop(&mut self) {
-        if let Ok(children) = self.children.get_mut() {
-            for child in children.values_mut() {
-                let _ = child.kill();
-                let _ = child.wait();
+        if let Ok(streams) = self.streams.get_mut() {
+            for (_, mut stream) in streams.drain() {
+                let _ = stream.child.kill();
+                let _ = stream.child.wait();
+                let _ = stream.worker.join();
             }
         }
     }

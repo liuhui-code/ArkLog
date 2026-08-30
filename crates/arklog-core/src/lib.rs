@@ -2,9 +2,14 @@ use std::process::Command;
 
 use serde::Serialize;
 
+mod fault_log;
 mod runtime;
 mod stream;
 
+pub use fault_log::{
+    DeviceFaultLogExportResult, DeviceFaultLogExporter, DeviceFaultLogFetchResult,
+    DeviceFaultLogRawEntry, DeviceFaultLogStatus,
+};
 pub use runtime::{DeviceLogRuntime, DeviceLogStreamSummary};
 pub use stream::{spawn_log_reader, DeviceLogOutputBatch, LogBatchSink};
 
@@ -77,6 +82,22 @@ impl<R: CommandRunner> HdcClient<R> {
             return Err(combined.trim().to_string());
         }
         Ok(devices)
+    }
+
+    pub fn list_fault_logs(&self, device_id: &str) -> Result<DeviceFaultLogFetchResult, String> {
+        if device_id.trim().is_empty() {
+            return Err("Device id is required".to_string());
+        }
+        let args = ["-t", device_id, "shell", "faultloggerd", "--dump"].map(str::to_string);
+        let command = format!("{} {}", self.executable, args.join(" "));
+        let output = self.runner.output(&self.executable, &args)?;
+        Ok(fault_log::normalize_fault_log_output(
+            device_id,
+            command,
+            &output.stdout,
+            &output.stderr,
+            output.success,
+        ))
     }
 }
 

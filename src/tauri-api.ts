@@ -2,6 +2,8 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import type {
   ArkLogApi,
+  DeviceFaultLogExportResult,
+  DeviceFaultLogFetchResult,
   DeviceLogDevice,
   DeviceLogOutputBatch,
   DeviceLogStreamSummary,
@@ -16,11 +18,13 @@ type Listen = <T>(
 type TauriBoundary = {
   invoke: Invoke;
   listen: Listen;
+  writeClipboard?: (text: string) => Promise<void>;
 };
 
 const productionBoundary: TauriBoundary = {
   invoke: tauriInvoke,
   listen: tauriListen,
+  writeClipboard: (text) => navigator.clipboard.writeText(text),
 };
 
 export function createTauriArkLogApi(
@@ -33,6 +37,17 @@ export function createTauriArkLogApi(
       { deviceId },
     ),
     stopStream: (streamId) => boundary.invoke<void>("stop_device_log_stream", { streamId }),
+    listFaultLogs: (deviceId) => boundary.invoke<DeviceFaultLogFetchResult>(
+      "list_device_fault_logs",
+      { deviceId },
+    ),
+    exportFaultLogs: (deviceId, entries) => boundary.invoke<DeviceFaultLogExportResult | null>(
+      "export_device_fault_logs",
+      { deviceId, entries },
+    ),
+    writeClipboard: (text) => boundary.writeClipboard
+      ? boundary.writeClipboard(text)
+      : navigator.clipboard.writeText(text),
     subscribeToOutput: (listener) => boundary.listen<DeviceLogOutputBatch>(
       "device-log-output",
       (event) => listener(event.payload),

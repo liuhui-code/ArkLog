@@ -10,6 +10,8 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    fileParallelism: false,
     setupFiles: ["./tests/setup.ts"],
+    testTimeout: 10_000,
   },
 });

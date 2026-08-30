@@ -1,3 +1,4 @@
 [workspace]
-members = ["crates/arklog-core", "src-tauri"]
+members = ["crates/arklog-core", "crates/arklog-tui"]
+exclude = ["src-tauri"]
 resolver = "2"

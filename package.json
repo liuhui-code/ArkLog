@@ -5,11 +5,13 @@
   "type": "module",
   "packageManager": "pnpm@10.12.1",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "tauri": "tauri"
+    "dev": "cargo run -p arklog --release",
+    "build": "cargo build -p arklog --release",
+    "test": "cargo test --workspace",
+    "memory:check": "cargo run -p arklog --release -- --memory-probe 100000",
+    "legacy:web:build": "tsc --noEmit && vite build",
+    "legacy:web:test": "vitest run",
+    "legacy:tauri": "tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

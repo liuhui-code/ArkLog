@@ -22,6 +22,32 @@ fn flushes_the_final_partial_log_batch_without_loss() {
     assert_eq!(batches[0].lines, ["first", "second"]);
 }
 
+#[test]
+fn preserves_order_across_a_large_burst_and_its_partial_tail() {
+    let sink = Arc::new(RecordingSink::default());
+    let expected = (0..10_037)
+        .map(|index| format!("line-{index}"))
+        .collect::<Vec<_>>();
+    let input = format!("{}\n", expected.join("\n"));
+
+    let worker = spawn_log_reader(
+        "stream-burst".to_string(),
+        "USB-01".to_string(),
+        Cursor::new(input.into_bytes()),
+        sink.clone(),
+    );
+    worker.join().expect("reader worker");
+
+    let actual = sink
+        .batches
+        .lock()
+        .expect("batches")
+        .iter()
+        .flat_map(|batch| batch.lines.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+}
+
 #[derive(Default)]
 struct RecordingSink {
     batches: Mutex<Vec<DeviceLogOutputBatch>>,
