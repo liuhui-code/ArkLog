@@ -19,6 +19,7 @@ fn version_tag_builds_and_publishes_a_windows_executable() {
         "runs-on: windows-latest",
         "permissions:",
         "contents: write",
+        "uses: pnpm/action-setup@v6",
         "run: pnpm test",
         "run: pnpm build",
         "run: cargo test --workspace",
