@@ -61,6 +61,9 @@ without bound.
 17. A filter change scans raw records once while rebuilding filter and find
     indexes together. A find-only change evaluates visible records without
     re-running the regex. Unchanged queries perform no rebuild.
+18. Stream presentation uses the confirmed lifecycle state. A stop request
+    shows `STOPPING` until HDC termination and final-batch flushing complete;
+    only the confirmed inactive state shows `STOPPED`.
 
 ## Object boundaries
 

@@ -1,4 +1,4 @@
-use arklog::{render_app, AppView, InputMode, LogTab, OverlayMode, TextInputView};
+use arklog::{render_app, AppView, InputMode, LogTab, OverlayMode, StreamState, TextInputView};
 use ratatui::{
     backend::TestBackend,
     style::{Color, Modifier},
@@ -24,9 +24,9 @@ fn render_hilog(
                     devices: &[],
                     selected_device: 0,
                     tab: LogTab::HiLog,
-                    streaming: true,
+                    stream_state: &StreamState::Streaming,
+                    pending_stream_action: None,
                     connection_status: "Devices ready",
-                    stream_status: "Streaming",
                     fault_status: "Not loaded",
                     action_error: None,
                     raw_count: lines.len() as u64,

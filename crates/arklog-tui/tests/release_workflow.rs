@@ -2,6 +2,14 @@ use std::fs;
 use std::path::PathBuf;
 
 #[test]
+fn release_package_version_is_v0_2_2() {
+    assert_eq!(env!("CARGO_PKG_VERSION"), "0.2.2");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let package = fs::read_to_string(root.join("package.json")).expect("root package metadata");
+    assert!(package.contains("\"version\": \"0.2.2\""));
+}
+
+#[test]
 fn version_tag_builds_and_publishes_windows_and_macos_executables() {
     let workflow_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -76,4 +84,32 @@ fn pushes_and_pull_requests_verify_macos_and_windows() {
             "CI workflow is missing required behavior: {required_behavior}"
         );
     }
+}
+
+#[test]
+fn windows_release_embeds_the_multisize_arklog_application_icon() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let icon_path = root.join("assets/icons/icon.ico");
+    let icon = fs::read(&icon_path).unwrap_or_else(|error| {
+        panic!(
+            "release icon must exist at {}: {error}",
+            icon_path.display()
+        )
+    });
+    assert!(icon.len() >= 6, "release icon must contain an ICO header");
+    assert_eq!(&icon[..4], &[0, 0, 1, 0], "release icon must be ICO");
+    assert!(
+        u16::from_le_bytes([icon[4], icon[5]]) >= 4,
+        "release icon must contain multiple desktop sizes"
+    );
+
+    let manifest =
+        fs::read_to_string(root.join("crates/arklog-tui/Cargo.toml")).expect("ArkLog manifest");
+    let build_script =
+        fs::read_to_string(root.join("crates/arklog-tui/build.rs")).expect("ArkLog build script");
+    assert!(manifest.contains("build = \"build.rs\""));
+    assert!(manifest.contains("winresource"));
+    assert!(build_script.contains("CARGO_CFG_TARGET_OS"));
+    assert!(build_script.contains("HOST"));
+    assert!(build_script.contains("../../assets/icons/icon.ico"));
 }

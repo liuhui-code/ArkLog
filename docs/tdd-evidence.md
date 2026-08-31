@@ -490,8 +490,8 @@ Successful background polling never clears the last user-action error.
 
 ## Truthful state and bounded UI work
 
-RED: official verbose HDC rows disappeared; stale Fault results crossed devices; async stop lost its tail; exited HDC stayed `LIVE`; idle pumping redrew globally; query changes rescanned raw logs twice; a slow UI buffered megabytes.
+RED: official HDC rows disappeared; stale Fault results crossed devices; async stop lost its tail; exited HDC stayed `LIVE`; pending stop rendered contradictory status; refresh completion overrode cancelled start intent; idle work redrew globally; queries rescanned raw logs twice.
 
-GREEN: focused discovery, controller stream/Fault, UI, store, runtime, and slow-consumer tests now pass.
+GREEN: focused discovery, controller stream/Fault, stream-intent/UI, store, runtime, and slow-consumer tests now pass.
 
-Protected behavior: displayed connection/stream state follows reality, final logs survive, redraw and per-tick work are bounded, unchanged queries do zero work, and filter/find rebuilds avoid duplicate scans.
+Protected behavior: lifecycle display follows confirmed state while queued intent stays separate; cancellation survives refresh; final logs survive; redraw and per-tick work stay bounded; unchanged queries do zero rebuild work.

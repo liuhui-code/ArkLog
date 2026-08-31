@@ -1,16 +1,20 @@
 use std::env;
 use std::io;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use arklog::{
     render_app, run_memory_probe, ActionStatus, AppCommand, AppView, ArkLogController,
-    Clipboard as ArkClipboard, CommandContext, CommandKeymap, InputMode, LogTab, OverlayMode,
-    TextInput, MEMORY_BUDGET_BYTES,
+    CommandContext, CommandKeymap, ExecutionLog, InputMode, LogTab, OverlayMode,
+    RuntimeDiagnostics, StreamIntent, TextInput, EXECUTION_LOG_MAX_BYTES, MEMORY_BUDGET_BYTES,
 };
 use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     DefaultTerminal,
 };
+
+mod system_clipboard;
+use system_clipboard::SystemClipboard;
 
 const MAX_LOG_BATCHES_PER_TICK: usize = 8;
 
@@ -21,11 +25,26 @@ fn main() -> io::Result<()> {
     let executable = env::var("ARKLOG_HDC_PATH")
         .or_else(|_| env::var("ARKLOG_HDC"))
         .unwrap_or_else(|_| "hdc".to_string());
+    let execution_log_path = env::var_os("ARKLOG_EXECUTION_LOG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| env::temp_dir().join("arklog-execution.log"));
+    let (execution_log, diagnostic_error) =
+        match ExecutionLog::start(&execution_log_path, EXECUTION_LOG_MAX_BYTES) {
+            Ok(log) => (Some(log), None),
+            Err(error) => (None, Some(format!("Execution log unavailable: {error}"))),
+        };
+    let execution_log_enabled = execution_log.is_some();
     let mut controller = ArkLogController::new(executable, Vec::new()).map_err(io::Error::other)?;
-    let startup_error = controller.request_device_refresh().err();
+    let startup_error = [controller.request_device_refresh().err(), diagnostic_error]
+        .into_iter()
+        .flatten()
+        .reduce(|left, right| format!("{left}; {right}"));
     let mut terminal = ratatui::try_init()?;
-    let result = TerminalApp::new(controller, startup_error).run(&mut terminal);
+    let result = TerminalApp::new(controller, startup_error, execution_log).run(&mut terminal);
     ratatui::try_restore()?;
+    if execution_log_enabled {
+        eprintln!("ArkLog execution log: {}", execution_log_path.display());
+    }
     result
 }
 
@@ -69,33 +88,8 @@ struct TerminalApp {
     should_quit: bool,
     viewport_height: usize,
     fault_scroll: usize,
-    start_when_device_ready: bool,
-}
-
-#[derive(Default)]
-struct SystemClipboard {
-    inner: Option<arboard::Clipboard>,
-}
-
-impl SystemClipboard {
-    fn inner(&mut self) -> Result<&mut arboard::Clipboard, String> {
-        if self.inner.is_none() {
-            self.inner = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
-        }
-        Ok(self.inner.as_mut().expect("clipboard initialized"))
-    }
-}
-
-impl ArkClipboard for SystemClipboard {
-    fn get_text(&mut self) -> Result<String, String> {
-        self.inner()?.get_text().map_err(|error| error.to_string())
-    }
-
-    fn set_text(&mut self, text: &str) -> Result<(), String> {
-        self.inner()?
-            .set_text(text)
-            .map_err(|error| error.to_string())
-    }
+    stream_intent: StreamIntent,
+    diagnostics: Option<RuntimeDiagnostics>,
 }
 
 struct RedrawState {
@@ -121,7 +115,23 @@ impl RedrawState {
 }
 
 impl TerminalApp {
-    fn new(controller: ArkLogController, action_error: Option<String>) -> Self {
+    fn new(
+        controller: ArkLogController,
+        action_error: Option<String>,
+        execution_log: Option<ExecutionLog>,
+    ) -> Self {
+        let diagnostics = execution_log.map(|log| {
+            RuntimeDiagnostics::new(
+                log,
+                controller.connection_state(),
+                controller.stream_state(),
+                controller.fault_state(),
+                controller.devices().len(),
+            )
+        });
+        if let (Some(diagnostics), Some(error)) = (&diagnostics, &action_error) {
+            diagnostics.record_error("startup", error);
+        }
         Self {
             controller,
             input_mode: InputMode::Normal,
@@ -132,7 +142,8 @@ impl TerminalApp {
             should_quit: false,
             viewport_height: 1,
             fault_scroll: 0,
-            start_when_device_ready: true,
+            stream_intent: StreamIntent::auto_start(),
+            diagnostics,
         }
     }
 
@@ -145,27 +156,26 @@ impl TerminalApp {
             {
                 Ok(batch_count) => redraw.mark_if(batch_count > 0),
                 Err(error) => {
-                    self.action_status.record_background(Err(error));
+                    self.record_background_error(error);
                     redraw.mark();
                 }
             }
             match self.controller.pump_background_tasks_with_activity() {
                 Ok(changed) => redraw.mark_if(changed),
                 Err(error) => {
-                    self.action_status.record_background(Err(error));
+                    self.record_background_error(error);
                     redraw.mark();
                 }
             }
-            if self.start_when_device_ready
-                && self.controller.connection_state() != &arklog::ConnectionState::Refreshing
-            {
-                self.start_when_device_ready = false;
-                if self.controller.connection_state() == &arklog::ConnectionState::Ready {
-                    let start_result = self.controller.start_stream();
-                    self.record(start_result);
+            self.observe_runtime();
+            match self.stream_intent.reconcile(&mut self.controller) {
+                Ok(changed) => redraw.mark_if(changed),
+                Err(error) => {
+                    self.record_background_error(error);
+                    redraw.mark();
                 }
-                redraw.mark();
             }
+            self.observe_runtime();
             if redraw.take() {
                 let size = terminal.size()?;
                 self.viewport_height = size.height.saturating_sub(10).max(1) as usize;
@@ -189,9 +199,9 @@ impl TerminalApp {
                             devices: self.controller.devices(),
                             selected_device: self.controller.selected_device_index(),
                             tab: state.tab(),
-                            streaming: self.controller.stream_is_live(),
+                            stream_state: self.controller.stream_state(),
+                            pending_stream_action: self.stream_intent.pending_action(),
                             connection_status: self.controller.connection_state().message(),
-                            stream_status: self.controller.stream_state().message(),
                             fault_status: self.controller.fault_state().message(),
                             action_error: self.action_status.error(),
                             raw_count: state.raw_count(),
@@ -235,6 +245,10 @@ impl TerminalApp {
         }
         let stop_result = self.controller.stop_stream();
         self.record(stop_result);
+        self.observe_runtime();
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.record_app_stop();
+        }
         Ok(())
     }
 
@@ -295,6 +309,9 @@ impl TerminalApp {
     }
 
     fn handle_command(&mut self, command: AppCommand) {
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.record_command(&format!("{command:?}"));
+        }
         match command {
             AppCommand::Quit => self.should_quit = true,
             AppCommand::ToggleStream => self.toggle_stream(),
@@ -380,11 +397,14 @@ impl TerminalApp {
     }
 
     fn toggle_stream(&mut self) {
-        let result = if self.controller.is_streaming() {
-            self.controller.request_stop_stream()
-        } else {
-            self.controller.start_stream()
-        };
+        self.stream_intent.toggle(self.controller.stream_state());
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.record_stream_intent(self.stream_intent.pending_action());
+        }
+        let result = self
+            .stream_intent
+            .reconcile(&mut self.controller)
+            .map(|_| ());
         self.record(result);
     }
 
@@ -432,7 +452,28 @@ impl TerminalApp {
     }
 
     fn record(&mut self, result: Result<(), String>) {
+        if let (Some(diagnostics), Err(error)) = (&self.diagnostics, &result) {
+            diagnostics.record_error("action", error);
+        }
         self.action_status.record_action(result);
+    }
+
+    fn record_background_error(&mut self, error: String) {
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.record_error("background", &error);
+        }
+        self.action_status.record_background(Err(error));
+    }
+
+    fn observe_runtime(&mut self) {
+        if let Some(diagnostics) = &mut self.diagnostics {
+            diagnostics.observe(
+                self.controller.connection_state(),
+                self.controller.stream_state(),
+                self.controller.fault_state(),
+                self.controller.devices().len(),
+            );
+        }
     }
 }
 

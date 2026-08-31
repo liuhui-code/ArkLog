@@ -1,4 +1,6 @@
-use arklog::{render_app, AppView, Clipboard, InputMode, LogTab, OverlayMode, TextInput};
+use arklog::{
+    render_app, AppView, Clipboard, InputMode, LogTab, OverlayMode, StreamState, TextInput,
+};
 use ratatui::{
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
@@ -39,9 +41,9 @@ fn long_input_keeps_the_cursor_suffix_visible() {
                     devices: &[],
                     selected_device: 0,
                     tab: LogTab::HiLog,
-                    streaming: false,
+                    stream_state: &StreamState::Stopped,
+                    pending_stream_action: None,
                     connection_status: "No devices",
-                    stream_status: "Stopped",
                     fault_status: "Not loaded",
                     action_error: None,
                     raw_count: 0,

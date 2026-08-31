@@ -8,7 +8,7 @@ use ratatui::{
 };
 use regex::Regex;
 
-use crate::{input_ui::render_text_input, theme, LogTab, TextInputView};
+use crate::{input_ui::render_text_input, theme, LogTab, StreamAction, StreamState, TextInputView};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputMode {
@@ -29,9 +29,9 @@ pub struct AppView<'a> {
     pub devices: &'a [DeviceLogDevice],
     pub selected_device: usize,
     pub tab: LogTab,
-    pub streaming: bool,
+    pub stream_state: &'a StreamState,
+    pub pending_stream_action: Option<StreamAction>,
     pub connection_status: &'a str,
-    pub stream_status: &'a str,
     pub fault_status: &'a str,
     pub action_error: Option<&'a str>,
     pub raw_count: u64,
@@ -105,6 +105,11 @@ fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
         ]
     };
     let [device, tabs, stream] = Layout::horizontal(constraints).areas(area);
+    let pending_hint = match view.pending_stream_action {
+        Some(StreamAction::Start) => " · START QUEUED",
+        Some(StreamAction::Stop) => " · STOP QUEUED",
+        None => "",
+    };
     let device_line = match view.device_id {
         Some(id) => {
             let mut spans = vec![
@@ -117,11 +122,12 @@ fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
             }
             Line::from(spans)
         }
-        None if view.connection_status == "No devices" => {
-            Line::styled("No devices", Style::new().fg(theme::WARNING))
-        }
+        None if view.connection_status == "No devices" => Line::styled(
+            format!("No devices{pending_hint}"),
+            Style::new().fg(theme::WARNING),
+        ),
         None => Line::styled(
-            format!("No devices · {}", view.connection_status),
+            format!("No devices · {}{pending_hint}", view.connection_status),
             Style::new().fg(theme::WARNING),
         ),
     };
@@ -141,10 +147,18 @@ fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
             .block(theme::panel(" LOG VIEWS ")),
         tabs,
     );
-    let (stream_label, color) = if view.streaming {
-        ("● LIVE", theme::SUCCESS)
-    } else {
-        ("■ STOPPED", theme::WARNING)
+    let (stream_label, color) = match view.stream_state {
+        StreamState::Starting => ("◌ STARTING", theme::INFO),
+        StreamState::Streaming => ("● LIVE", theme::SUCCESS),
+        StreamState::Stopping => ("◌ STOPPING", theme::WARNING),
+        StreamState::Stopped => ("■ STOPPED", theme::WARNING),
+        StreamState::Error { active: true, .. } => ("! ACTIVE", theme::ERROR),
+        StreamState::Error { active: false, .. } => ("! STOPPED", theme::ERROR),
+    };
+    let stream_detail = match (view.stream_state, view.pending_stream_action) {
+        (StreamState::Stopping, Some(StreamAction::Start)) => "RESTART QUEUED",
+        (StreamState::Starting, Some(StreamAction::Stop)) => "STOP QUEUED",
+        _ => view.stream_state.message(),
     };
     let stream_line = if view.device_id.is_none() {
         Line::from("")
@@ -154,7 +168,7 @@ fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
                 stream_label,
                 Style::new().fg(color).add_modifier(Modifier::BOLD),
             ),
-            Span::raw(format!("  {}", view.stream_status)),
+            Span::raw(format!("  {stream_detail}")),
         ])
     };
     if view.device_id.is_some() {
@@ -365,7 +379,7 @@ fn render_footer(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
     } else if view.tab == LogTab::FaultLog {
         " ↑/↓ entry  PgUp/PgDn inspect  Ctrl+R refresh  Ctrl+D devices  Ctrl+S stream  Ctrl+Q quit"
     } else {
-        " Tab view  Ctrl+D devices  Ctrl+S stream  Ctrl+R refresh  Ctrl+E regex  Ctrl+F find  Ctrl+Q quit"
+        " Tab view  Ctrl+S stream  Ctrl+L clear  Ctrl+Q quit  Ctrl+E regex  Ctrl+F find  Ctrl+D devices  Ctrl+R refresh"
     };
     frame.render_widget(
         Paragraph::new(vec![

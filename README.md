@@ -59,7 +59,7 @@ cargo run -p arklog --release
 
 - `Tab`：切换 HiLog/Fault Log
 - `Ctrl+D`：打开/关闭设备连接列表
-- `Ctrl+S`：启动/停止 HiLog
+- `Ctrl+S`：启动/停止 HiLog；刷新或启停过渡期间再次按下可取消/反转待执行操作
 - `Ctrl+R`：刷新设备连接列表或当前 Fault Log
 - `←`/`→`：在设备列表中切换设备
 - `Ctrl+E`：编辑正则过滤
@@ -81,6 +81,26 @@ cargo run -p arklog --release
 通常使用 `Ctrl+Shift+C`。`Ctrl+C` 不再作为 ArkLog 的退出键。
 
 普通单字符不会触发命令；在正则和查找输入框中可直接输入文本。
+
+## 执行诊断日志
+
+ArkLog 默认把应用执行轨迹写入系统临时目录：Windows 为
+`%TEMP%\arklog-execution.log`，macOS 为 `$TMPDIR/arklog-execution.log`。退出后终端会
+打印实际路径。需要把日志放到容易找到的位置时，可以在启动前指定：
+
+```powershell
+$env:ARKLOG_EXECUTION_LOG = "$PWD\arklog-execution.log"
+.\ArkLog-windows-x86_64.exe
+```
+
+```bash
+ARKLOG_EXECUTION_LOG="$PWD/arklog-execution.log" ./ArkLog-macos-aarch64
+```
+
+该文件记录 `Ctrl+S` 等命令、连接/流/Fault 状态变化、时间戳和错误，最大 1 MiB；
+不会记录 HiLog、Fault Log 正文、正则/查找内容或剪贴板内容。系统或 HDC 错误可能带有
+设备标识或本机路径，公开上传前请检查。报告真实设备问题时，请同时附上复现步骤、
+ArkLog 版本和这份执行日志。
 
 ## 显示建议
 
