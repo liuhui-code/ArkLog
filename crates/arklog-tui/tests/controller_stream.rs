@@ -49,23 +49,26 @@ fn frame_pump_processes_only_the_requested_number_of_batches() {
     let mut controller =
         ArkLogController::new(fixture_path().to_string_lossy(), devices).expect("controller");
     controller.start_stream().expect("start stream");
-    std::thread::sleep(Duration::from_millis(200));
 
-    assert_eq!(
-        controller
-            .pump_log_batches_limited(1)
-            .expect("pump one batch"),
-        1
-    );
+    wait_for_one_batch(&mut controller);
     assert_eq!(controller.state().raw_count(), 50);
-    assert_eq!(
-        controller
-            .pump_log_batches_limited(1)
-            .expect("pump next batch"),
-        1
-    );
+    wait_for_one_batch(&mut controller);
     assert_eq!(controller.state().raw_count(), 51);
     controller.stop_stream().expect("stop stream");
+}
+
+fn wait_for_one_batch(controller: &mut ArkLogController) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let processed = controller
+            .pump_log_batches_limited(1)
+            .expect("pump one batch");
+        if processed == 1 {
+            return;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for log batch");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]

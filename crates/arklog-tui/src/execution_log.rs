@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::thread::{self, JoinHandle};
@@ -25,11 +25,12 @@ impl ExecutionLog {
             ));
         }
         let path = path.as_ref().to_path_buf();
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
             .read(true)
             .open(&path)?;
+        file.seek(SeekFrom::End(0))?;
         let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE_CAPACITY);
         let worker = thread::spawn(move || write_events(file, receiver, max_bytes));
         Ok(Self {
@@ -162,13 +163,16 @@ fn write_events(mut file: File, receiver: mpsc::Receiver<String>, max_bytes: usi
     let mut used = file
         .metadata()
         .map_or(0, |metadata| metadata.len() as usize);
-    if used > max_bytes && file.set_len(0).is_ok() {
+    if used > max_bytes {
+        if reset_file(&mut file).is_err() {
+            return;
+        }
         used = 0;
     }
     while let Ok(mut line) = receiver.recv() {
         fit_line(&mut line, max_bytes);
         if used.saturating_add(line.len()) > max_bytes {
-            if file.flush().is_err() || file.set_len(0).is_err() {
+            if reset_file(&mut file).is_err() {
                 return;
             }
             used = 0;
@@ -178,6 +182,13 @@ fn write_events(mut file: File, receiver: mpsc::Receiver<String>, max_bytes: usi
         }
         used = used.saturating_add(line.len());
     }
+}
+
+fn reset_file(file: &mut File) -> io::Result<()> {
+    file.flush()?;
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    Ok(())
 }
 
 fn fit_line(line: &mut String, max_bytes: usize) {
