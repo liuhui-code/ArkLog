@@ -86,7 +86,13 @@ impl<R: CommandRunner> HdcClient<R> {
         if device_id.trim().is_empty() {
             return Err("Device id is required".to_string());
         }
-        let args = ["-t", device_id, "shell", "faultloggerd", "--dump"].map(str::to_string);
+        let args = [
+            "-t",
+            device_id,
+            "shell",
+            "hidumper -s 1201 -a \"-p Faultlogger -l -d\"",
+        ]
+        .map(str::to_string);
         let command = format!("{} {}", self.executable, args.join(" "));
         let output = self
             .runner

@@ -11,8 +11,8 @@ filter immediately visible without changing any raw log text.
 
 1. Every non-empty full match of the active regular expression is highlighted
    in each visible HiLog line.
-2. Matching remains case-sensitive and uses the exact regular expression
-   entered in `Filter logs`.
+2. Matching is case-insensitive by default and otherwise uses the exact regular
+   expression entered in `Filter logs`; users do not need to add `(?i)`.
 3. A line may contain multiple highlighted matches, ordered from left to right.
 4. Highlighting splits presentation text only. Copyable text content and the
    in-memory raw line remain byte-for-byte unchanged.

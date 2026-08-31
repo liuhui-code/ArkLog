@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use arklog::{
     render_app, run_memory_probe, ActionStatus, AppCommand, AppView, ArkLogController,
-    CommandContext, CommandKeymap, InputMode, LogTab, OverlayMode, MEMORY_BUDGET_BYTES,
+    Clipboard as ArkClipboard, CommandContext, CommandKeymap, InputMode, LogTab, OverlayMode,
+    TextInput, MEMORY_BUDGET_BYTES,
 };
 use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
@@ -62,12 +63,39 @@ struct TerminalApp {
     controller: ArkLogController,
     input_mode: InputMode,
     overlay: OverlayMode,
-    input_draft: String,
+    input: TextInput,
+    clipboard: SystemClipboard,
     action_status: ActionStatus,
     should_quit: bool,
     viewport_height: usize,
     fault_scroll: usize,
     start_when_device_ready: bool,
+}
+
+#[derive(Default)]
+struct SystemClipboard {
+    inner: Option<arboard::Clipboard>,
+}
+
+impl SystemClipboard {
+    fn inner(&mut self) -> Result<&mut arboard::Clipboard, String> {
+        if self.inner.is_none() {
+            self.inner = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
+        }
+        Ok(self.inner.as_mut().expect("clipboard initialized"))
+    }
+}
+
+impl ArkClipboard for SystemClipboard {
+    fn get_text(&mut self) -> Result<String, String> {
+        self.inner()?.get_text().map_err(|error| error.to_string())
+    }
+
+    fn set_text(&mut self, text: &str) -> Result<(), String> {
+        self.inner()?
+            .set_text(text)
+            .map_err(|error| error.to_string())
+    }
 }
 
 struct RedrawState {
@@ -98,7 +126,8 @@ impl TerminalApp {
             controller,
             input_mode: InputMode::Normal,
             overlay: OverlayMode::None,
-            input_draft: String::new(),
+            input: TextInput::new(""),
+            clipboard: SystemClipboard::default(),
             action_status: ActionStatus::new(action_error),
             should_quit: false,
             viewport_height: 1,
@@ -178,7 +207,7 @@ impl TerminalApp {
                             lines: &lines,
                             input_mode: self.input_mode,
                             overlay: self.overlay,
-                            input_draft: &self.input_draft,
+                            input: self.input.view(),
                             fault_result: self.controller.fault_result(),
                             selected_fault: self.controller.selected_fault(),
                             fault_scroll: self.fault_scroll,
@@ -196,6 +225,10 @@ impl TerminalApp {
                         redraw.mark();
                     }
                     Event::Resize(_, _) => redraw.mark(),
+                    Event::Paste(text) if self.input_mode != InputMode::Normal => {
+                        self.input.insert_text(&text);
+                        redraw.mark();
+                    }
                     _ => {}
                 }
             }
@@ -275,12 +308,12 @@ impl TerminalApp {
             }
             AppCommand::EditFilter if self.controller.state().tab() == LogTab::HiLog => {
                 self.input_mode = InputMode::Filter;
-                self.input_draft = self.controller.state().filter_query().to_string();
+                self.input = TextInput::new(self.controller.state().filter_query());
             }
             AppCommand::EditFilter => {}
             AppCommand::Find => {
                 self.input_mode = InputMode::Find;
-                self.input_draft = self.controller.state().find_query().to_string();
+                self.input = TextInput::new(self.controller.state().find_query());
             }
             AppCommand::NextMatch => {
                 let result = self
@@ -314,37 +347,30 @@ impl TerminalApp {
         match key.code {
             KeyCode::Esc => {
                 self.input_mode = InputMode::Normal;
-                self.input_draft.clear();
+                self.input = TextInput::new("");
             }
             KeyCode::Enter if self.input_mode == InputMode::Filter => {
                 self.controller
                     .state_mut()
-                    .apply_filter(self.input_draft.clone());
+                    .apply_filter(self.input.text().to_string());
                 self.input_mode = InputMode::Normal;
-                self.input_draft.clear();
+                self.input = TextInput::new("");
             }
             KeyCode::Enter => {
                 self.apply_or_advance_find(key.modifiers.contains(KeyModifiers::SHIFT))
             }
-            KeyCode::Backspace => {
-                self.input_draft.pop();
-            }
-            KeyCode::Char(character)
-                if !key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
-            {
-                self.input_draft.push(character);
-            }
-            _ => {}
+            _ => match self.input.handle_key(key, &mut self.clipboard) {
+                Ok(_) => {}
+                Err(error) => self.action_status.record_action(Err(error)),
+            },
         }
     }
 
     fn apply_or_advance_find(&mut self, backwards: bool) {
-        let result = if self.input_draft != self.controller.state().find_query() {
+        let result = if self.input.text() != self.controller.state().find_query() {
             self.controller
                 .state_mut()
-                .set_find(self.input_draft.clone())
+                .set_find(self.input.text().to_string())
         } else if backwards {
             self.controller.state_mut().previous_find()
         } else {

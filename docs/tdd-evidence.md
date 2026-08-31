@@ -204,8 +204,7 @@ RED commands and observed failures:
 - focused core fetch test: missing `DeviceFaultLogStatus` and
   `HdcClient::list_fault_logs`.
 - focused unavailable-state test: returned `Error` instead of `Unavailable`.
-- focused unauthorized-state test: returned `Error` instead of
-  `Unauthorized`.
+- official hidumper output/error tests: legacy command and false `Ready`.
 - focused `tests/tauri-api.test.ts`: `api.listFaultLogs is not a function`.
 - focused `tests/app.test.tsx`: missing accessible `Fault Log` tab.
 
@@ -215,8 +214,8 @@ GREEN commands:
 - `pnpm test -- tests/tauri-api.test.ts tests/app.test.tsx`
 - `cargo check -p arklog`
 
-Protected behavior: HDC command construction, raw-entry splitting with internal
-blank-line preservation, structured ready/empty/unavailable/unauthorized/error
+Protected behavior: official hidumper construction, delimited raw-entry
+splitting, structured ready/empty/unavailable/unauthorized/error
 states, Tauri boundary mapping, HiLog/Fault Log tabs, refresh, initial
 selection, row selection, and raw inspection.
 
@@ -486,7 +485,7 @@ GREEN commands:
 Protected behavior: device refresh works during an active stream without
 interrupting a still-online selected device; confirmed disconnects stop stale
 streams; HDC errors remain visible in the single no-device status; `Ctrl+D`
-opens a complete device list; and all character commands require Control.
+opens devices; bounded inputs support standard editing; `Ctrl+Q` exits safely.
 Successful background polling never clears the last user-action error.
 
 ## Truthful state and bounded UI work

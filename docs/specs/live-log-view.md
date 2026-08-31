@@ -12,9 +12,9 @@ stream while the user operates that phone.
 1. ArkLog preserves every complete raw line received during the current view;
    it does not shorten a line or evict an older displayed line because a
    frontend line limit was reached.
-2. The HiLog query is always interpreted as a regular expression. An empty
-   expression matches every line, and an invalid expression reports an inline
-   error without modifying any raw line.
+2. The HiLog query is always interpreted as a case-insensitive regular
+   expression. An empty expression matches every line, and an invalid
+   expression reports an inline error without modifying any raw line.
 3. Changing the regular expression re-evaluates the current raw-line buffer.
    After that change, only newly received lines matching the active expression
    become visible.

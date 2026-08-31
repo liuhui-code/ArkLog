@@ -1,4 +1,4 @@
-use arklog::{render_app, AppView, InputMode, LogTab, OverlayMode};
+use arklog::{render_app, AppView, InputMode, LogTab, OverlayMode, TextInputView};
 use arklog_core::{
     DeviceFaultLogFetchResult, DeviceFaultLogRawEntry, DeviceFaultLogStatus, DeviceLogDevice,
 };
@@ -39,7 +39,7 @@ fn renders_compact_shared_workspace_without_duplicate_device_or_hilog_status() {
                     lines: &lines,
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::None,
-                    input_draft: "",
+                    input: TextInputView::at_end(""),
                     fault_result: None,
                     selected_fault: 0,
                     fault_scroll: 0,
@@ -61,6 +61,7 @@ fn renders_compact_shared_workspace_without_duplicate_device_or_hilog_status() {
     assert!(rendered.contains("REGEX FILTER"));
     assert!(rendered.contains("page shown"));
     assert!(rendered.contains("FOLLOWING LATEST"));
+    assert!(rendered.contains("Ctrl+Q quit"));
     assert!(!rendered.to_ascii_lowercase().contains("hilog output"));
     assert!(!rendered.to_ascii_lowercase().contains("unavailable"));
 }
@@ -98,7 +99,7 @@ fn renders_the_real_connection_failure_inside_the_no_devices_status() {
                     lines: &[],
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::None,
-                    input_draft: "",
+                    input: TextInputView::at_end(""),
                     fault_result: None,
                     selected_fault: 0,
                     fault_scroll: 0,
@@ -145,7 +146,7 @@ fn renders_the_real_connection_failure_inside_the_no_devices_status() {
                     lines: &[],
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::None,
-                    input_draft: "",
+                    input: TextInputView::at_end(""),
                     fault_result: None,
                     selected_fault: 0,
                     fault_scroll: 0,
@@ -210,7 +211,7 @@ fn renders_all_connected_devices_in_the_device_list_view() {
                     lines: &[],
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::Devices,
-                    input_draft: "",
+                    input: TextInputView::at_end(""),
                     fault_result: None,
                     selected_fault: 0,
                     fault_scroll: 0,
@@ -233,7 +234,7 @@ fn renders_all_connected_devices_in_the_device_list_view() {
         .iter()
         .find(|cell| cell.symbol() == "●")
         .expect("connection marker");
-    assert_eq!(connection_marker.fg, Color::Yellow);
+    assert_eq!(connection_marker.fg, Color::Rgb(249, 226, 175));
     assert!(rendered.contains("CONNECTED DEVICES"));
     assert!(rendered.contains("USB-01"));
     assert!(rendered.contains("product:alpha"));
@@ -283,7 +284,7 @@ fn device_list_windows_a_large_collection_around_the_selection() {
                     lines: &[],
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::Devices,
-                    input_draft: "",
+                    input: TextInputView::at_end(""),
                     fault_result: None,
                     selected_fault: 0,
                     fault_scroll: 0,
@@ -339,7 +340,7 @@ fn highlights_every_non_empty_regex_match_without_changing_the_raw_line() {
                     lines: &lines,
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::None,
-                    input_draft: "",
+                    input: TextInputView::at_end(""),
                     fault_result: None,
                     selected_fault: 0,
                     fault_scroll: 0,
@@ -352,16 +353,16 @@ fn highlights_every_non_empty_regex_match_without_changing_the_raw_line() {
     let first_match = find_cell_sequence(buffer.content(), "task-12");
     let second_match = find_cell_sequence(buffer.content(), "task-345");
     for offset in first_match..first_match + "task-12".len() {
-        assert_eq!(buffer.content()[offset].bg, Color::Yellow);
+        assert_eq!(buffer.content()[offset].bg, Color::Rgb(249, 226, 175));
     }
     for offset in second_match..second_match + "task-345".len() {
-        assert_eq!(buffer.content()[offset].bg, Color::Yellow);
+        assert_eq!(buffer.content()[offset].bg, Color::Rgb(249, 226, 175));
     }
 }
 
 #[test]
 fn highlights_all_find_matches_and_distinguishes_the_current_match_line() {
-    let lines = vec!["needle first".to_string(), "needle second".to_string()];
+    let lines = vec!["Needle first".to_string(), "NEEDLE second".to_string()];
     let backend = TestBackend::new(100, 20);
     let mut terminal = Terminal::new(backend).expect("terminal");
     terminal
@@ -385,14 +386,14 @@ fn highlights_all_find_matches_and_distinguishes_the_current_match_line() {
                     filter_query: "",
                     active_filter: None,
                     filter_error: None,
-                    find_query: "needle",
+                    find_query: "nEeDlE",
                     find_status: (2, 2),
                     current_find_visible_index: Some(1),
                     window_start: 0,
                     lines: &lines,
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::None,
-                    input_draft: "",
+                    input: TextInputView::at_end(""),
                     fault_result: None,
                     selected_fault: 0,
                     fault_scroll: 0,
@@ -402,12 +403,12 @@ fn highlights_all_find_matches_and_distinguishes_the_current_match_line() {
         .expect("draw");
 
     let buffer = terminal.backend().buffer();
-    let first = find_cell_sequence(buffer.content(), "needle first");
-    let second = find_cell_sequence(buffer.content(), "needle second");
+    let first = find_cell_sequence(buffer.content(), "Needle first");
+    let second = find_cell_sequence(buffer.content(), "NEEDLE second");
     assert!(buffer.content()[first]
         .modifier
         .contains(ratatui::style::Modifier::UNDERLINED));
-    assert_eq!(buffer.content()[second].bg, Color::DarkGray);
+    assert_eq!(buffer.content()[second].bg, Color::Rgb(49, 50, 68));
 }
 
 #[test]
@@ -460,7 +461,7 @@ fn windows_large_fault_lists_and_raw_diagnostics_to_the_visible_area() {
                     lines: &[],
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::None,
-                    input_draft: "",
+                    input: TextInputView::at_end(""),
                     fault_result: Some(&result),
                     selected_fault: 29,
                     fault_scroll: 90,

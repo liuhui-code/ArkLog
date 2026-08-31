@@ -30,18 +30,22 @@ without bound.
    reads the requested window from the session store.
 6. Producer/consumer queues are bounded. Saturation applies backpressure to
    HDC instead of dropping source lines or growing memory.
-7. A regular expression has explicit pattern and compiled-size limits. Invalid
-   or over-budget expressions report an inline error and never mutate raw
-   session data.
+7. A regular expression is case-insensitive by default and has explicit pattern
+   and compiled-size limits. Invalid or over-budget expressions report an inline
+   error and never mutate raw session data.
 8. Changing the expression re-indexes the complete current session. Appended
    lines are evaluated incrementally while the expression is unchanged.
 9. Find is case-insensitive literal search over regex-visible HiLog lines.
    Navigation wraps, pauses follow-latest, and reveals the current result.
 10. The release process must remain below 50 MiB RSS during the automated
     100,000-line stress scenario on each supported desktop platform.
-11. Character commands require the Control modifier. Device refresh remains
-    available while HiLog is active; a refresh preserves an online selected
-    stream and stops a stale stream when its device disappears or goes offline.
+11. Character commands require the Control modifier and `Ctrl+Q` quits.
+    Filter/Find inputs support bounded desktop editing with Ctrl on Windows and
+    Command on macOS: select/copy/cut/paste, undo/redo, cursor selection, plus
+    platform-native word/line navigation and deletion. Terminal log-copy
+    shortcuts remain unclaimed.
+    Device refresh preserves an online selected stream and stops a stale stream
+    when its device disappears or goes offline.
 12. Device discovery, Fault Log fetch, and stream stop run as single-flight
     background jobs. HDC commands have deadlines and total-output limits, and
     connection, stream, and Fault Log states cannot overwrite each other.

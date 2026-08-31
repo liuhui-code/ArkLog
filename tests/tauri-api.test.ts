@@ -49,7 +49,7 @@ describe("Tauri ArkLog API", () => {
         return {
           deviceId: "USB-01",
           entries: [{ id: "USB-01-fault-1", raw: "Reason: JS_ERROR" }],
-          command: "hdc -t USB-01 shell faultloggerd --dump",
+          command: 'hdc -t USB-01 shell hidumper -s 1201 -a "-p Faultlogger -l -d"',
           stderr: "",
           status: "ready",
           message: "ok",

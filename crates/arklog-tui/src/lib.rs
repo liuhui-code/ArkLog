@@ -1,11 +1,14 @@
 mod action_status;
 mod background_job;
 mod controller;
+mod input_ui;
 mod keymap;
 mod memory;
 mod runtime_state;
 mod session_store;
 mod state;
+mod text_input;
+mod theme;
 mod ui;
 
 pub use action_status::ActionStatus;
@@ -15,4 +18,5 @@ pub use memory::{run_memory_probe, MemoryProbe, MEMORY_BUDGET_BYTES};
 pub use runtime_state::{ConnectionState, FaultLogState, StreamState};
 pub use session_store::{QueryRebuildWork, SessionLogStore};
 pub use state::{ArkLogState, LogTab};
+pub use text_input::{Clipboard, TextInput, TextInputView};
 pub use ui::{render_app, AppView, InputMode, OverlayMode};

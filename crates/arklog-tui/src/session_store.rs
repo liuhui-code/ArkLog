@@ -103,6 +103,7 @@ impl SessionLogStore {
             None
         } else {
             match RegexBuilder::new(query)
+                .case_insensitive(true)
                 .size_limit(REGEX_COMPILED_LIMIT)
                 .dfa_size_limit(REGEX_COMPILED_LIMIT)
                 .build()

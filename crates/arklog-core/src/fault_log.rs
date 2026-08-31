@@ -86,19 +86,19 @@ pub(crate) fn normalize_fault_log_output(
 ) -> DeviceFaultLogFetchResult {
     let stdout = String::from_utf8_lossy(stdout).replace("\r\n", "\n");
     let stderr = String::from_utf8_lossy(stderr).replace("\r\n", "\n");
-    let entries = if success {
+    let unavailable = has_unavailable_error(&stdout) || has_unavailable_error(&stderr);
+    let unauthorized = has_authorization_error(&stdout) || has_authorization_error(&stderr);
+    let entries = if success && !unavailable && !unauthorized {
         split_entries(device_id, &stdout)
     } else {
         Vec::new()
     };
-    let (status, message) = if contains_ignore_ascii_case(&stdout, "Connect server failed")
-        || contains_ignore_ascii_case(&stderr, "Connect server failed")
-    {
+    let (status, message) = if unavailable {
         (
             DeviceFaultLogStatus::Unavailable,
             first_message_pair(&stdout, &stderr, "Device fault logs unavailable"),
         )
-    } else if has_authorization_error(&stdout) || has_authorization_error(&stderr) {
+    } else if unauthorized {
         (
             DeviceFaultLogStatus::Unauthorized,
             first_message_pair(&stdout, &stderr, "Device authorization required"),
@@ -128,6 +128,9 @@ pub(crate) fn normalize_fault_log_output(
 }
 
 fn split_entries(device_id: &str, output: &str) -> Vec<DeviceFaultLogRawEntry> {
+    if output.lines().any(|line| line.trim() == "******") {
+        return split_hidumper_entries(device_id, output);
+    }
     let mut entries = Vec::new();
     let mut current = String::new();
     let mut lines = output.lines().peekable();
@@ -144,6 +147,29 @@ fn split_entries(device_id: &str, output: &str) -> Vec<DeviceFaultLogRawEntry> {
                 current.push('\n');
             }
             current.push_str(line);
+        }
+    }
+    push_entry(device_id, &mut entries, &mut current);
+    entries
+}
+
+fn split_hidumper_entries(device_id: &str, output: &str) -> Vec<DeviceFaultLogRawEntry> {
+    let mut entries = Vec::new();
+    let mut current = String::new();
+    let mut reading_list = false;
+    for line in output.lines() {
+        match line.trim() {
+            "Fault log list:" => reading_list = true,
+            "******" if reading_list => {
+                push_entry(device_id, &mut entries, &mut current);
+            }
+            _ if reading_list => {
+                if !current.is_empty() {
+                    current.push('\n');
+                }
+                current.push_str(line);
+            }
+            _ => {}
         }
     }
     push_entry(device_id, &mut entries, &mut current);
@@ -186,9 +212,24 @@ fn first_message_pair(first: &str, second: &str, fallback: &str) -> String {
 }
 
 fn has_authorization_error(text: &str) -> bool {
-    ["unauthorized", "permission denied", "authentication failed"]
-        .iter()
-        .any(|needle| contains_ignore_ascii_case(text, needle))
+    [
+        "unauthorized",
+        "permission denied",
+        "not permitted",
+        "authentication failed",
+    ]
+    .iter()
+    .any(|needle| contains_ignore_ascii_case(text, needle))
+}
+
+fn has_unavailable_error(text: &str) -> bool {
+    [
+        "Connect server failed",
+        "Service is not ready",
+        "No such system ability",
+    ]
+    .iter()
+    .any(|needle| contains_ignore_ascii_case(text, needle))
 }
 
 fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {

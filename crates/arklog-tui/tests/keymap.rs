@@ -35,3 +35,29 @@ fn hilog_commands_are_disabled_outside_the_hilog_workspace() {
         assert_eq!(CommandKeymap::resolve(key, CommandContext::Devices), None);
     }
 }
+
+#[test]
+fn editing_and_terminal_copy_shortcuts_are_not_claimed_as_global_commands() {
+    let windows_copy = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    for context in [
+        CommandContext::HiLog,
+        CommandContext::FaultLog,
+        CommandContext::Devices,
+    ] {
+        assert_eq!(CommandKeymap::resolve(windows_copy, context), None);
+    }
+
+    let terminal_copy = KeyEvent::new(
+        KeyCode::Char('c'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+    let macos_copy = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER);
+    assert_eq!(
+        CommandKeymap::resolve(terminal_copy, CommandContext::HiLog),
+        None
+    );
+    assert_eq!(
+        CommandKeymap::resolve(macos_copy, CommandContext::HiLog),
+        None
+    );
+}

@@ -130,7 +130,7 @@ class FaultLogApi implements ArkLogApi {
         raw: "Reason: APP_FREEZE\nProcess: com.example.camera\nPID: 987\nSummary: Main thread blocked by image decode",
       },
     ],
-    command: "hdc -t USB-01 shell faultloggerd --dump",
+    command: 'hdc -t USB-01 shell hidumper -s 1201 -a "-p Faultlogger -l -d"',
     stderr: "",
     status: "ready",
     message: "ok",

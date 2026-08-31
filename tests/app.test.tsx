@@ -338,7 +338,7 @@ describe("ArkLog workbench", () => {
           raw: "Reason: APP_KILLED\nSummary: Process force stopped",
         },
       ],
-      command: "hdc -t USB-01 shell faultloggerd --dump",
+      command: 'hdc -t USB-01 shell hidumper -s 1201 -a "-p Faultlogger -l -d"',
       stderr: "",
       status: "ready",
       message: "ok",

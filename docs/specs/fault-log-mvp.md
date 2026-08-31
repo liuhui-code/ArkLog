@@ -16,18 +16,21 @@ the live HiLog stream.
    state remains intact when switching tabs.
 2. `Refresh Fault Logs` requests diagnostics for the selected device and is
    disabled when no device is selected or a refresh is active.
-3. The HDC command is `hdc -t <device> shell faultloggerd --dump`. Its execution
-   remains behind the core `CommandRunner` boundary.
-4. Successful output is split into raw entries at blank lines followed by a
-   recognized field such as `Timestamp`, `Reason`, `Process`, `PID`, `Summary`,
-   or `FaultType`. Internal blank lines remain part of the entry.
+3. The HDC command uses the official Hiview dump surface:
+   `hdc -t <device> shell hidumper -s 1201 -a "-p Faultlogger -l -d"`.
+   Its execution remains behind the core `CommandRunner` boundary.
+4. Current hidumper output is split at its `******` record delimiters. Legacy
+   raw output remains supported by splitting at blank lines followed by a
+   recognized field. Internal blank lines remain part of the entry.
 5. Fetch results use structured states: `ready`, `empty`, `unavailable`,
    `unauthorized`, or `error`. Command failure text is returned as data rather
    than causing an unhandled UI exception.
 6. The first returned entry is selected. Selecting another row updates the raw
    inspector.
 7. Empty and failure states remain visible in the Fault Log panel and include a
-   concise command-level message.
+   concise command-level message. A successful command that reports `dump
+   operation is not permitted` is classified as unauthorized; `Service is not
+   ready` is unavailable. Neither message is rendered as a ready log entry.
 8. Changing the selected device clears the current Fault Log view so entries
    from different devices are never mixed.
 

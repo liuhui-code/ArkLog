@@ -41,6 +41,24 @@ fn reindexes_changed_regex_and_indexes_later_lines_incrementally() {
 }
 
 #[test]
+fn regex_filter_matches_existing_and_later_lines_without_case_sensitivity() {
+    let mut store = SessionLogStore::new().expect("session store");
+    store
+        .append_lines(["ERROR old", "unrelated"])
+        .expect("initial lines");
+
+    store.set_filter("^error").expect("valid regex");
+    store
+        .append_lines(["Error new", "still unrelated"])
+        .expect("later lines");
+
+    assert_eq!(
+        store.visible_window(0, 10).expect("visible lines"),
+        ["ERROR old", "Error new"]
+    );
+}
+
+#[test]
 fn invalid_or_over_budget_regex_hides_matches_without_discarding_raw_lines() {
     let mut store = SessionLogStore::new().expect("session store");
     store.append_lines(["raw line"]).expect("raw line");
@@ -97,7 +115,7 @@ fn find_index_rebuilds_after_filter_changes_and_indexes_later_lines() {
     assert_eq!(store.find_visible_index(0).expect("first match"), Some(0));
     assert_eq!(store.find_visible_index(1).expect("second match"), Some(2));
 
-    store.set_filter("(?i)^needle").expect("filter");
+    store.set_filter("^needle").expect("filter");
     assert_eq!(store.find_count(), 2);
     assert_eq!(store.find_visible_index(1).expect("rebuilt match"), Some(1));
 }

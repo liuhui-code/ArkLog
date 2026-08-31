@@ -11,7 +11,7 @@ export class FakeArkLogApi implements ArkLogApi {
   faultLogResult: DeviceFaultLogFetchResult = {
     deviceId: "USB-01",
     entries: [],
-    command: "hdc -t USB-01 shell faultloggerd --dump",
+    command: 'hdc -t USB-01 shell hidumper -s 1201 -a "-p Faultlogger -l -d"',
     stderr: "",
     status: "empty",
     message: "No fault logs found",
