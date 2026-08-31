@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 const MAX_BATCH_LINES: usize = 50;
-const MAX_PENDING_LINES: usize = 10_000;
+const MAX_PENDING_LINES: usize = 256;
 const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

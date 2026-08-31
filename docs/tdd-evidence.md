@@ -456,3 +456,43 @@ Protected behavior: no intentional in-memory eviction, ordered large bursts,
 one repaint notification per frame, bounded DOM work, stable paused scrolling,
 offscreen find, listener-before-start ordering, single-flight lifecycle
 commands, and worker-joined final-batch delivery.
+
+## Truthful device refresh and Ctrl commands
+
+Specification: `docs/specs/ratatui-low-memory-runtime.md`.
+
+RED commands and observed failures:
+
+- the public controller test returned `Stop HiLog before refreshing devices`
+  while a normal active stream was running.
+- HDC discovery failure was silently reduced to `No devices`, and startup
+  replaced the original daemon error with the same generic message.
+- the public TestBackend view had no complete device collection or connected
+  device list mode.
+- the keymap contract could not import a command mapper, while the application
+  handled bare `Q`, `S`, `R`, `/`, `G`, `C`, and `N` characters directly.
+- a disconnect refresh left the removed device's stream marked `Streaming`,
+  and an offline selected device still rendered a green connection marker.
+- a successful 30 ms background batch poll erased the last discovery or
+  refresh error before the user could read it.
+
+GREEN commands:
+
+- focused `controller_stream`, `ui`, and `keymap` integration tests.
+- `pnpm test`, `pnpm build`, `cargo test --workspace`, and
+  `cargo check -p arklog`.
+- `pnpm memory:check` and the Windows MSVC target check.
+
+Protected behavior: device refresh works during an active stream without
+interrupting a still-online selected device; confirmed disconnects stop stale
+streams; HDC errors remain visible in the single no-device status; `Ctrl+D`
+opens a complete device list; and all character commands require Control.
+Successful background polling never clears the last user-action error.
+
+## Truthful state and bounded UI work
+
+RED: official verbose HDC rows disappeared; stale Fault results crossed devices; async stop lost its tail; exited HDC stayed `LIVE`; idle pumping redrew globally; query changes rescanned raw logs twice; a slow UI buffered megabytes.
+
+GREEN: focused discovery, controller stream/Fault, UI, store, runtime, and slow-consumer tests now pass.
+
+Protected behavior: displayed connection/stream state follows reality, final logs survive, redraw and per-tick work are bounded, unchanged queries do zero work, and filter/find rebuilds avoid duplicate scans.

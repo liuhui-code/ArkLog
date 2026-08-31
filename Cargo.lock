@@ -28,7 +28,7 @@ dependencies = [
 
 [[package]]
 name = "arklog"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arklog-core",
  "libc",
@@ -38,8 +38,9 @@ dependencies = [
 
 [[package]]
 name = "arklog-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "libc",
  "serde",
 ]
 

@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.12.1
+
+      - name: Test package interface
+        run: pnpm test
+
+      - name: Build release executable
+        run: pnpm build
+
+      - name: Test Rust workspace
+        run: cargo test --workspace
+
+      - name: Check ArkLog package
+        run: cargo check -p arklog
+
+      - name: Verify 50 MiB memory budget
+        run: pnpm memory:check

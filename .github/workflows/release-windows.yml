@@ -1,4 +1,4 @@
-name: Release Windows
+name: Release Desktop
 
 on:
   push:
@@ -9,14 +9,27 @@ permissions:
   contents: write
 
 jobs:
-  release-windows:
-    runs-on: windows-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: ArkLog-windows-x86_64
+            asset: ArkLog-windows-x86_64.exe
+          - os: macos-15-intel
+            artifact: ArkLog-macos-x86_64
+            asset: ArkLog-macos-x86_64
+          - os: macos-15
+            artifact: ArkLog-macos-aarch64
+            asset: ArkLog-macos-aarch64
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Check out source
         uses: actions/checkout@v6
 
       - name: Install Rust stable
-        shell: pwsh
+        shell: bash
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
@@ -38,26 +51,48 @@ jobs:
       - name: Check ArkLog package
         run: cargo check -p arklog
 
+      - name: Verify 50 MiB memory budget
+        run: pnpm memory:check
+
       - name: Prepare Windows executable
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/release/arklog.exe dist/ArkLog-windows-x86_64.exe
 
-      - name: Upload workflow artifact
+      - name: Prepare macOS executable
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/arklog dist/${{ matrix.asset }}
+
+      - name: Upload executable
         uses: actions/upload-artifact@v7
         with:
-          name: ArkLog-windows-x86_64
-          path: dist/ArkLog-windows-x86_64.exe
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.asset }}
           if-no-files-found: error
 
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download desktop executables
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ArkLog-*
+          path: dist
+          merge-multiple: true
+
       - name: Publish GitHub Release
-        shell: pwsh
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          gh release create "$env:GITHUB_REF_NAME"
-          "dist/ArkLog-windows-x86_64.exe"
+          gh release create "$GITHUB_REF_NAME"
+          dist/*
           --verify-tag
           --generate-notes
-          --title "ArkLog $env:GITHUB_REF_NAME"
+          --title "ArkLog $GITHUB_REF_NAME"

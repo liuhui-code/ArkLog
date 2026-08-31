@@ -1,4 +1,7 @@
-use arklog::{render_app, AppView, InputMode, LogTab};
+use arklog::{render_app, AppView, InputMode, LogTab, OverlayMode};
+use arklog_core::{
+    DeviceFaultLogFetchResult, DeviceFaultLogRawEntry, DeviceFaultLogStatus, DeviceLogDevice,
+};
 use ratatui::{backend::TestBackend, style::Color, Terminal};
 use regex::Regex;
 
@@ -15,9 +18,14 @@ fn renders_compact_shared_workspace_without_duplicate_device_or_hilog_status() {
                 AppView {
                     device_id: None,
                     device_status: "No devices",
+                    devices: &[],
+                    selected_device: 0,
                     tab: LogTab::HiLog,
                     streaming: false,
-                    runtime_status: "No devices",
+                    connection_status: "No devices",
+                    stream_status: "Stopped",
+                    fault_status: "Not loaded",
+                    action_error: None,
                     raw_count: 1,
                     visible_count: 1,
                     following_latest: true,
@@ -30,9 +38,11 @@ fn renders_compact_shared_workspace_without_duplicate_device_or_hilog_status() {
                     window_start: 0,
                     lines: &lines,
                     input_mode: InputMode::Normal,
+                    overlay: OverlayMode::None,
                     input_draft: "",
                     fault_result: None,
                     selected_fault: 0,
+                    fault_scroll: 0,
                 },
             );
         })
@@ -56,6 +66,245 @@ fn renders_compact_shared_workspace_without_duplicate_device_or_hilog_status() {
 }
 
 #[test]
+fn renders_the_real_connection_failure_inside_the_no_devices_status() {
+    let backend = TestBackend::new(110, 28);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    terminal
+        .draw(|frame| {
+            render_app(
+                frame,
+                AppView {
+                    device_id: None,
+                    device_status: "No devices",
+                    devices: &[],
+                    selected_device: 0,
+                    tab: LogTab::HiLog,
+                    streaming: false,
+                    connection_status: "Connect server failed: daemon unavailable",
+                    stream_status: "Stopped",
+                    fault_status: "Not loaded",
+                    action_error: None,
+                    raw_count: 0,
+                    visible_count: 0,
+                    following_latest: true,
+                    filter_query: "",
+                    active_filter: None,
+                    filter_error: None,
+                    find_query: "",
+                    find_status: (0, 0),
+                    current_find_visible_index: None,
+                    window_start: 0,
+                    lines: &[],
+                    input_mode: InputMode::Normal,
+                    overlay: OverlayMode::None,
+                    input_draft: "",
+                    fault_result: None,
+                    selected_fault: 0,
+                    fault_scroll: 0,
+                },
+            );
+        })
+        .expect("draw");
+
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(rendered.contains("No devices"));
+    assert!(rendered.contains("Connect server failed"));
+
+    terminal
+        .draw(|frame| {
+            render_app(
+                frame,
+                AppView {
+                    device_id: Some("USB-01"),
+                    device_status: "online",
+                    devices: &[],
+                    selected_device: 0,
+                    tab: LogTab::HiLog,
+                    streaming: true,
+                    connection_status: "Connect server failed: stale snapshot",
+                    stream_status: "Streaming",
+                    fault_status: "Not loaded",
+                    action_error: None,
+                    raw_count: 0,
+                    visible_count: 0,
+                    following_latest: true,
+                    filter_query: "",
+                    active_filter: None,
+                    filter_error: None,
+                    find_query: "",
+                    find_status: (0, 0),
+                    current_find_visible_index: None,
+                    window_start: 0,
+                    lines: &[],
+                    input_mode: InputMode::Normal,
+                    overlay: OverlayMode::None,
+                    input_draft: "",
+                    fault_result: None,
+                    selected_fault: 0,
+                    fault_scroll: 0,
+                },
+            );
+        })
+        .expect("draw stale device");
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(rendered.contains("stale snapshot"));
+}
+
+#[test]
+fn renders_all_connected_devices_in_the_device_list_view() {
+    let devices = vec![
+        DeviceLogDevice {
+            id: "USB-01".to_string(),
+            label: "Phone A".to_string(),
+            status: "online".to_string(),
+            detail: "USB-01 Connected product:alpha".to_string(),
+        },
+        DeviceLogDevice {
+            id: "USB-02".to_string(),
+            label: "Phone B".to_string(),
+            status: "offline".to_string(),
+            detail: "USB-02 Offline product:beta".to_string(),
+        },
+    ];
+    let backend = TestBackend::new(110, 28);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    terminal
+        .draw(|frame| {
+            render_app(
+                frame,
+                AppView {
+                    device_id: Some("USB-02"),
+                    device_status: "offline",
+                    devices: &devices,
+                    selected_device: 1,
+                    tab: LogTab::HiLog,
+                    streaming: false,
+                    connection_status: "Devices ready",
+                    stream_status: "Stopped",
+                    fault_status: "Not loaded",
+                    action_error: None,
+                    raw_count: 0,
+                    visible_count: 0,
+                    following_latest: true,
+                    filter_query: "",
+                    active_filter: None,
+                    filter_error: None,
+                    find_query: "",
+                    find_status: (0, 0),
+                    current_find_visible_index: None,
+                    window_start: 0,
+                    lines: &[],
+                    input_mode: InputMode::Normal,
+                    overlay: OverlayMode::Devices,
+                    input_draft: "",
+                    fault_result: None,
+                    selected_fault: 0,
+                    fault_scroll: 0,
+                },
+            );
+        })
+        .expect("draw");
+
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    let connection_marker = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .find(|cell| cell.symbol() == "●")
+        .expect("connection marker");
+    assert_eq!(connection_marker.fg, Color::Yellow);
+    assert!(rendered.contains("CONNECTED DEVICES"));
+    assert!(rendered.contains("USB-01"));
+    assert!(rendered.contains("product:alpha"));
+    assert!(rendered.contains("USB-02"));
+    assert!(rendered.contains("product:beta"));
+    assert!(rendered.contains("Ctrl+R refresh"));
+}
+
+#[test]
+fn device_list_windows_a_large_collection_around_the_selection() {
+    let devices = (0..30)
+        .map(|index| DeviceLogDevice {
+            id: format!("USB-{index:02}"),
+            label: format!("Phone {index}"),
+            status: "online".to_string(),
+            detail: format!("USB-{index:02} Connected"),
+        })
+        .collect::<Vec<_>>();
+    let backend = TestBackend::new(110, 16);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    terminal
+        .draw(|frame| {
+            render_app(
+                frame,
+                AppView {
+                    device_id: Some("USB-29"),
+                    device_status: "online",
+                    devices: &devices,
+                    selected_device: 29,
+                    tab: LogTab::HiLog,
+                    streaming: false,
+                    connection_status: "Devices ready",
+                    stream_status: "Stopped",
+                    fault_status: "Not loaded",
+                    action_error: None,
+                    raw_count: 0,
+                    visible_count: 0,
+                    following_latest: true,
+                    filter_query: "",
+                    active_filter: None,
+                    filter_error: None,
+                    find_query: "",
+                    find_status: (0, 0),
+                    current_find_visible_index: None,
+                    window_start: 0,
+                    lines: &[],
+                    input_mode: InputMode::Normal,
+                    overlay: OverlayMode::Devices,
+                    input_draft: "",
+                    fault_result: None,
+                    selected_fault: 0,
+                    fault_scroll: 0,
+                },
+            );
+        })
+        .expect("draw");
+
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(rendered.contains("USB-29"));
+    assert!(rendered.contains("USB-29 Connected"));
+    assert!(!rendered.contains("USB-00"));
+}
+
+#[test]
 fn highlights_every_non_empty_regex_match_without_changing_the_raw_line() {
     let lines = vec!["before task-12 after task-345".to_string()];
     let filter = Regex::new(r"task-\d+").expect("regex");
@@ -69,9 +318,14 @@ fn highlights_every_non_empty_regex_match_without_changing_the_raw_line() {
                 AppView {
                     device_id: Some("USB-01"),
                     device_status: "online",
+                    devices: &[],
+                    selected_device: 0,
                     tab: LogTab::HiLog,
                     streaming: true,
-                    runtime_status: "Streaming",
+                    connection_status: "Devices ready",
+                    stream_status: "Streaming",
+                    fault_status: "Not loaded",
+                    action_error: None,
                     raw_count: 1,
                     visible_count: 1,
                     following_latest: true,
@@ -84,9 +338,11 @@ fn highlights_every_non_empty_regex_match_without_changing_the_raw_line() {
                     window_start: 0,
                     lines: &lines,
                     input_mode: InputMode::Normal,
+                    overlay: OverlayMode::None,
                     input_draft: "",
                     fault_result: None,
                     selected_fault: 0,
+                    fault_scroll: 0,
                 },
             );
         })
@@ -115,9 +371,14 @@ fn highlights_all_find_matches_and_distinguishes_the_current_match_line() {
                 AppView {
                     device_id: Some("USB-01"),
                     device_status: "online",
+                    devices: &[],
+                    selected_device: 0,
                     tab: LogTab::HiLog,
                     streaming: true,
-                    runtime_status: "Streaming",
+                    connection_status: "Devices ready",
+                    stream_status: "Streaming",
+                    fault_status: "Not loaded",
+                    action_error: None,
                     raw_count: 2,
                     visible_count: 2,
                     following_latest: false,
@@ -130,9 +391,11 @@ fn highlights_all_find_matches_and_distinguishes_the_current_match_line() {
                     window_start: 0,
                     lines: &lines,
                     input_mode: InputMode::Normal,
+                    overlay: OverlayMode::None,
                     input_draft: "",
                     fault_result: None,
                     selected_fault: 0,
+                    fault_scroll: 0,
                 },
             );
         })
@@ -145,6 +408,80 @@ fn highlights_all_find_matches_and_distinguishes_the_current_match_line() {
         .modifier
         .contains(ratatui::style::Modifier::UNDERLINED));
     assert_eq!(buffer.content()[second].bg, Color::DarkGray);
+}
+
+#[test]
+fn windows_large_fault_lists_and_raw_diagnostics_to_the_visible_area() {
+    let entries = (0..30)
+        .map(|index| DeviceFaultLogRawEntry {
+            id: format!("fault-{index:02}"),
+            raw: (0..100)
+                .map(|line| format!("fault-{index:02}-line-{line:03}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        })
+        .collect();
+    let result = DeviceFaultLogFetchResult {
+        device_id: "USB-01".to_string(),
+        entries,
+        command: "hdc faultloggerd".to_string(),
+        stderr: String::new(),
+        status: DeviceFaultLogStatus::Ready,
+        message: "ok".to_string(),
+    };
+    let backend = TestBackend::new(100, 18);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    terminal
+        .draw(|frame| {
+            render_app(
+                frame,
+                AppView {
+                    device_id: Some("USB-01"),
+                    device_status: "online",
+                    devices: &[],
+                    selected_device: 0,
+                    tab: LogTab::FaultLog,
+                    streaming: true,
+                    connection_status: "Devices ready",
+                    stream_status: "Streaming",
+                    fault_status: "Fault logs ready",
+                    action_error: None,
+                    raw_count: 0,
+                    visible_count: 0,
+                    following_latest: true,
+                    filter_query: "",
+                    active_filter: None,
+                    filter_error: None,
+                    find_query: "",
+                    find_status: (0, 0),
+                    current_find_visible_index: None,
+                    window_start: 0,
+                    lines: &[],
+                    input_mode: InputMode::Normal,
+                    overlay: OverlayMode::None,
+                    input_draft: "",
+                    fault_result: Some(&result),
+                    selected_fault: 29,
+                    fault_scroll: 90,
+                },
+            );
+        })
+        .expect("draw");
+
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(rendered.contains("fault-29"));
+    assert!(!rendered.contains("fault-00"));
+    assert!(rendered.contains("fault-29-line-090"));
+    assert!(!rendered.contains("fault-29-line-000"));
+    assert!(rendered.contains("PgUp/PgDn inspect"));
+    assert!(!rendered.contains("Ctrl+F find"));
 }
 
 fn find_cell_sequence(cells: &[ratatui::buffer::Cell], needle: &str) -> usize {

@@ -9,6 +9,12 @@ static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 const MAX_REGEX_BYTES: usize = 4 * 1024;
 const REGEX_COMPILED_LIMIT: usize = 1024 * 1024;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QueryRebuildWork {
+    pub raw_records_scanned: u64,
+    pub visible_records_scanned: u64,
+}
+
 pub struct SessionLogStore {
     directory: PathBuf,
     data_writer: Option<BufWriter<File>>,
@@ -26,6 +32,7 @@ pub struct SessionLogStore {
     filter: Option<Regex>,
     filter_valid: bool,
     find_query: String,
+    last_rebuild_work: QueryRebuildWork,
 }
 
 impl SessionLogStore {
@@ -53,6 +60,7 @@ impl SessionLogStore {
             filter: None,
             filter_valid: true,
             find_query: String::new(),
+            last_rebuild_work: QueryRebuildWork::default(),
         })
     }
 
@@ -76,6 +84,15 @@ impl SessionLogStore {
     }
 
     pub fn set_filter(&mut self, query: &str) -> Result<(), String> {
+        self.last_rebuild_work = QueryRebuildWork::default();
+        let unchanged = self.filter_valid
+            && self
+                .filter
+                .as_ref()
+                .map_or(query.is_empty(), |filter| filter.as_str() == query);
+        if unchanged {
+            return Ok(());
+        }
         if query.len() > MAX_REGEX_BYTES {
             self.invalidate_filter()?;
             return Err(format!(
@@ -99,14 +116,22 @@ impl SessionLogStore {
         };
         self.filter = filter;
         self.filter_valid = true;
-        self.rebuild_visible_index()
-            .and_then(|()| self.rebuild_find_index())
+        self.rebuild_query_indexes()
             .map_err(|error| error.to_string())
     }
 
     pub fn set_find(&mut self, query: &str) -> io::Result<()> {
-        self.find_query = query.to_lowercase();
+        self.last_rebuild_work = QueryRebuildWork::default();
+        let normalized = query.to_lowercase();
+        if self.find_query == normalized {
+            return Ok(());
+        }
+        self.find_query = normalized;
         self.rebuild_find_index()
+    }
+
+    pub fn last_rebuild_work(&self) -> QueryRebuildWork {
+        self.last_rebuild_work
     }
 
     pub fn find_count(&self) -> u64 {
@@ -216,17 +241,22 @@ impl SessionLogStore {
         Ok(())
     }
 
-    fn rebuild_visible_index(&mut self) -> io::Result<()> {
+    fn rebuild_query_indexes(&mut self) -> io::Result<()> {
         self.flush()?;
         let filter = self.filter.clone();
         let filter_valid = self.filter_valid;
+        let find_query = self.find_query.clone();
         let visible_writer = self
             .visible_index_writer
             .as_mut()
             .expect("visible index writer");
         visible_writer.get_ref().set_len(0)?;
         visible_writer.seek(SeekFrom::Start(0))?;
-        self.visible_count = 0;
+        let find_writer = self.find_index_writer.as_mut().expect("find index writer");
+        find_writer.get_ref().set_len(0)?;
+        find_writer.seek(SeekFrom::Start(0))?;
+        let mut visible_count = 0;
+        let mut find_count = 0;
 
         let data_reader = self.data_reader.as_mut().expect("raw data reader");
         data_reader.seek(SeekFrom::Start(0))?;
@@ -235,10 +265,19 @@ impl SessionLogStore {
             let line = read_next_record(&mut data_reader)?;
             if filter_valid && filter.as_ref().is_none_or(|filter| filter.is_match(&line)) {
                 append_u64(visible_writer, raw_index)?;
-                self.visible_count += 1;
+                if !find_query.is_empty() && line.to_lowercase().contains(&find_query) {
+                    append_u64(find_writer, visible_count)?;
+                    find_count += 1;
+                }
+                visible_count += 1;
             }
         }
-        visible_writer.flush()
+        visible_writer.flush()?;
+        find_writer.flush()?;
+        self.visible_count = visible_count;
+        self.find_count = find_count;
+        self.last_rebuild_work.raw_records_scanned = self.raw_count;
+        Ok(())
     }
 
     fn invalidate_filter(&mut self) -> Result<(), String> {
@@ -278,20 +317,29 @@ impl SessionLogStore {
         if self.find_query.is_empty() {
             return Ok(());
         }
-        let filter = self.filter.clone();
-        let filter_valid = self.filter_valid;
         let find_query = self.find_query.clone();
+        let visible_reader = self
+            .visible_index_reader
+            .as_mut()
+            .expect("visible index reader");
+        visible_reader.seek(SeekFrom::Start(0))?;
+        let mut visible_reader = BufReader::with_capacity(64 * 1024, visible_reader);
+        let raw_index_reader = self.raw_index_reader.as_mut().expect("raw index reader");
+        raw_index_reader.seek(SeekFrom::Start(0))?;
+        let mut raw_index_reader = BufReader::with_capacity(64 * 1024, raw_index_reader);
         let data_reader = self.data_reader.as_mut().expect("raw data reader");
         data_reader.seek(SeekFrom::Start(0))?;
         let mut data_reader = BufReader::with_capacity(64 * 1024, data_reader);
-        let mut visible_index = 0;
-        for _ in 0..self.raw_count {
+        let mut next_raw_index = 0;
+        let mut next_data_offset = 0;
+        for visible_index in 0..self.visible_count {
+            let raw_index = read_next_u64(&mut visible_reader)?;
+            raw_index_reader.seek_relative(((raw_index - next_raw_index) * 8) as i64)?;
+            let data_offset = read_next_u64(&mut raw_index_reader)?;
+            next_raw_index = raw_index + 1;
+            data_reader.seek_relative((data_offset - next_data_offset) as i64)?;
             let line = read_next_record(&mut data_reader)?;
-            let visible =
-                filter_valid && filter.as_ref().is_none_or(|filter| filter.is_match(&line));
-            if !visible {
-                continue;
-            }
+            next_data_offset = data_offset + 8 + line.len() as u64;
             if line.to_lowercase().contains(&find_query) {
                 append_u64(
                     self.find_index_writer.as_mut().expect("find index writer"),
@@ -299,8 +347,8 @@ impl SessionLogStore {
                 )?;
                 self.find_count += 1;
             }
-            visible_index += 1;
         }
+        self.last_rebuild_work.visible_records_scanned = self.visible_count;
         self.find_index_writer
             .as_mut()
             .expect("find index writer")
@@ -378,6 +426,12 @@ fn create_file_pair(path: PathBuf) -> io::Result<(BufWriter<File>, File)> {
 
 fn append_u64(file: &mut BufWriter<File>, value: u64) -> io::Result<()> {
     file.write_all(&value.to_le_bytes())
+}
+
+fn read_next_u64(reader: &mut impl Read) -> io::Result<u64> {
+    let mut bytes = [0; 8];
+    reader.read_exact(&mut bytes)?;
+    Ok(u64::from_le_bytes(bytes))
 }
 
 fn read_u64(file: &mut File, offset: u64) -> io::Result<u64> {

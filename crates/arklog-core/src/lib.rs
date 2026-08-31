@@ -1,7 +1,8 @@
-use std::process::Command;
+use std::time::Duration;
 
 use serde::Serialize;
 
+mod command;
 mod fault_log;
 mod runtime;
 mod stream;
@@ -10,7 +11,7 @@ pub use fault_log::{
     DeviceFaultLogExportResult, DeviceFaultLogExporter, DeviceFaultLogFetchResult,
     DeviceFaultLogRawEntry, DeviceFaultLogStatus,
 };
-pub use runtime::{DeviceLogRuntime, DeviceLogStreamSummary};
+pub use runtime::{DeviceLogRuntime, DeviceLogStreamExit, DeviceLogStreamSummary};
 pub use stream::{spawn_log_reader, DeviceLogOutputBatch, LogBatchSink};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -22,37 +23,11 @@ pub struct DeviceLogDevice {
     pub detail: String,
 }
 
-pub struct CommandOutput {
-    pub success: bool,
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
-}
-
-pub trait CommandRunner: Send + Sync {
-    fn output(&self, program: &str, args: &[String]) -> Result<CommandOutput, String>;
-}
-
-pub struct SystemCommandRunner;
-
-impl CommandRunner for SystemCommandRunner {
-    fn output(&self, program: &str, args: &[String]) -> Result<CommandOutput, String> {
-        let mut command = Command::new(program);
-        configure_hidden_command(&mut command);
-        let output = command
-            .args(args)
-            .output()
-            .map_err(|error| format!("Failed to run {program}: {error}"))?;
-        Ok(CommandOutput {
-            success: output.status.success(),
-            stdout: output.stdout,
-            stderr: output.stderr,
-        })
-    }
-}
-
 pub struct HdcClient<R = SystemCommandRunner> {
     executable: String,
     runner: R,
+    device_policy: CommandPolicy,
+    fault_policy: CommandPolicy,
 }
 
 impl HdcClient<SystemCommandRunner> {
@@ -63,15 +38,33 @@ impl HdcClient<SystemCommandRunner> {
 
 impl<R: CommandRunner> HdcClient<R> {
     pub fn with_runner(executable: impl Into<String>, runner: R) -> Self {
+        Self::with_policies(
+            executable,
+            runner,
+            CommandPolicy::new(Duration::from_secs(3), 256 * 1024),
+            CommandPolicy::new(Duration::from_secs(5), 4 * 1024 * 1024),
+        )
+    }
+
+    pub fn with_policies(
+        executable: impl Into<String>,
+        runner: R,
+        device_policy: CommandPolicy,
+        fault_policy: CommandPolicy,
+    ) -> Self {
         Self {
             executable: executable.into(),
             runner,
+            device_policy,
+            fault_policy,
         }
     }
 
     pub fn list_devices(&self) -> Result<Vec<DeviceLogDevice>, String> {
         let args = ["list", "targets", "-v"].map(str::to_string);
-        let output = self.runner.output(&self.executable, &args)?;
+        let output = self
+            .runner
+            .output_with_policy(&self.executable, &args, self.device_policy)?;
         let combined = format!(
             "{}{}",
             String::from_utf8_lossy(&output.stdout),
@@ -79,7 +72,12 @@ impl<R: CommandRunner> HdcClient<R> {
         );
         let devices = parse_hdc_targets(&combined);
         if !output.success && devices.is_empty() {
-            return Err(combined.trim().to_string());
+            let message = combined.trim();
+            return Err(if message.is_empty() {
+                "HDC device discovery failed".to_string()
+            } else {
+                message.to_string()
+            });
         }
         Ok(devices)
     }
@@ -90,7 +88,9 @@ impl<R: CommandRunner> HdcClient<R> {
         }
         let args = ["-t", device_id, "shell", "faultloggerd", "--dump"].map(str::to_string);
         let command = format!("{} {}", self.executable, args.join(" "));
-        let output = self.runner.output(&self.executable, &args)?;
+        let output = self
+            .runner
+            .output_with_policy(&self.executable, &args, self.fault_policy)?;
         Ok(fault_log::normalize_fault_log_output(
             device_id,
             command,
@@ -111,17 +111,7 @@ fn parse_hdc_targets(output: &str) -> Vec<DeviceLogDevice> {
             }
             let mut parts = detail.split_whitespace();
             let id = parts.next()?.to_string();
-            let status = match parts
-                .next()
-                .unwrap_or("unknown")
-                .to_ascii_lowercase()
-                .as_str()
-            {
-                "connected" | "online" => "online",
-                "offline" => "offline",
-                "unauthorized" => "unauthorized",
-                _ => "unknown",
-            };
+            let status = parts.find_map(normalize_device_status)?;
             Some(DeviceLogDevice {
                 label: id.clone(),
                 id,
@@ -132,13 +122,15 @@ fn parse_hdc_targets(output: &str) -> Vec<DeviceLogDevice> {
         .collect()
 }
 
-fn configure_hidden_command(command: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
+fn normalize_device_status(value: &str) -> Option<&'static str> {
+    match value.to_ascii_lowercase().as_str() {
+        "ready" | "connected" | "online" => Some("online"),
+        "offline" => Some("offline"),
+        "unauthorized" => Some("unauthorized"),
+        "unknown" => Some("unknown"),
+        _ => None,
     }
-    #[cfg(not(windows))]
-    let _ = command;
 }
+
+pub(crate) use command::{configure_hidden_command, terminate_process_tree};
+pub use command::{CommandOutput, CommandPolicy, CommandRunner, SystemCommandRunner};

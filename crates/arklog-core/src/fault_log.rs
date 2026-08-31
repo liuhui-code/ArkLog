@@ -86,25 +86,22 @@ pub(crate) fn normalize_fault_log_output(
 ) -> DeviceFaultLogFetchResult {
     let stdout = String::from_utf8_lossy(stdout).replace("\r\n", "\n");
     let stderr = String::from_utf8_lossy(stderr).replace("\r\n", "\n");
-    let combined = format!("{stdout}\n{stderr}");
-    let combined_lower = combined.to_ascii_lowercase();
     let entries = if success {
         split_entries(device_id, &stdout)
     } else {
         Vec::new()
     };
-    let (status, message) = if combined.contains("Connect server failed") {
-        (
-            DeviceFaultLogStatus::Unavailable,
-            first_message(&combined, "Device fault logs unavailable"),
-        )
-    } else if combined_lower.contains("unauthorized")
-        || combined_lower.contains("permission denied")
-        || combined_lower.contains("authentication failed")
+    let (status, message) = if contains_ignore_ascii_case(&stdout, "Connect server failed")
+        || contains_ignore_ascii_case(&stderr, "Connect server failed")
     {
         (
+            DeviceFaultLogStatus::Unavailable,
+            first_message_pair(&stdout, &stderr, "Device fault logs unavailable"),
+        )
+    } else if has_authorization_error(&stdout) || has_authorization_error(&stderr) {
+        (
             DeviceFaultLogStatus::Unauthorized,
-            first_message(&combined, "Device authorization required"),
+            first_message_pair(&stdout, &stderr, "Device authorization required"),
         )
     } else if !success {
         (
@@ -131,38 +128,37 @@ pub(crate) fn normalize_fault_log_output(
 }
 
 fn split_entries(device_id: &str, output: &str) -> Vec<DeviceFaultLogRawEntry> {
-    let mut blocks: Vec<Vec<&str>> = vec![Vec::new()];
-    let lines: Vec<&str> = output.lines().collect();
-
-    for (index, line) in lines.iter().enumerate() {
+    let mut entries = Vec::new();
+    let mut current = String::new();
+    let mut lines = output.lines().peekable();
+    while let Some(line) = lines.next() {
         if line.trim().is_empty()
-            && should_split(blocks.last().expect("current block"), lines.get(index + 1))
+            && !current.trim().is_empty()
+            && lines
+                .peek()
+                .is_some_and(|next| looks_like_entry_start(next.trim()))
         {
-            blocks.push(Vec::new());
+            push_entry(device_id, &mut entries, &mut current);
         } else {
-            blocks.last_mut().expect("current block").push(line);
+            if !current.is_empty() {
+                current.push('\n');
+            }
+            current.push_str(line);
         }
     }
-
-    blocks
-        .into_iter()
-        .filter_map(|lines| {
-            let raw = lines.join("\n").trim().to_string();
-            (!raw.is_empty()).then_some(raw)
-        })
-        .enumerate()
-        .map(|(index, raw)| DeviceFaultLogRawEntry {
-            id: format!("{device_id}-fault-{}", index + 1),
-            raw,
-        })
-        .collect()
+    push_entry(device_id, &mut entries, &mut current);
+    entries
 }
 
-fn should_split(current: &[&str], next: Option<&&str>) -> bool {
-    if current.is_empty() {
-        return false;
+fn push_entry(device_id: &str, entries: &mut Vec<DeviceFaultLogRawEntry>, current: &mut String) {
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        entries.push(DeviceFaultLogRawEntry {
+            id: format!("{device_id}-fault-{}", entries.len() + 1),
+            raw: trimmed.to_string(),
+        });
     }
-    next.is_some_and(|line| looks_like_entry_start(line.trim()))
+    current.clear();
 }
 
 fn looks_like_entry_start(line: &str) -> bool {
@@ -178,4 +174,26 @@ fn first_message(text: &str, fallback: &str) -> String {
         .find(|line| !line.is_empty())
         .unwrap_or(fallback)
         .to_string()
+}
+
+fn first_message_pair(first: &str, second: &str, fallback: &str) -> String {
+    let message = first_message(first, "");
+    if message.is_empty() {
+        first_message(second, fallback)
+    } else {
+        message
+    }
+}
+
+fn has_authorization_error(text: &str) -> bool {
+    ["unauthorized", "permission denied", "authentication failed"]
+        .iter()
+        .any(|needle| contains_ignore_ascii_case(text, needle))
+}
+
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
 }

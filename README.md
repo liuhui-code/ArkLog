@@ -6,19 +6,29 @@ macOS Terminal/iTerm2，不再依赖浏览器窗口承载实时日志。
 
 ## 当前能力
 
-- 通过 `hdc list targets -v` 发现和切换设备
+- 通过 `hdc list targets -v` 发现设备，使用 `Ctrl+D` 查看和刷新完整连接列表
 - 通过 `hdc -t <device> hilog` 启停实时 HiLog
 - 使用最多 50 行/100 ms 的批次和固定 8 批次通道传输，拥塞时背压而不丢行
 - 通过单一正则表达式过滤并高亮全部非空命中，正则源和编译内存都有硬上限
-- 使用 `Ctrl+F`/`Command+F` 做视图内字面量查找，支持循环定位和命中高亮
-- 滚动离开末尾后固定当前锚点，按 `G` 回到最新并恢复自动跟随
+- 使用 `Ctrl+F` 做视图内字面量查找，支持循环定位和命中高亮
+- 滚动离开末尾后固定当前锚点，按 `Ctrl+G` 回到最新并恢复自动跟随
 - HiLog/Fault Log 共用工作区，通过 `Tab` 切换；Fault Log 可刷新和浏览原始诊断
+- HDC 查询带超时与输出上限，设备刷新、Fault Log 查询和停流均不阻塞界面线程
 - `Clear` 不停止日志流，只开启一个新的空会话
 - 不使用 SQLite，不跨启动保留 HiLog
 - 完整 HiLog 写入进程生命周期临时文件；内存只保留有界批次、索引状态和当前视窗
 - release 压力探针对 100,000 行执行 50 MiB RSS 硬门禁
 
 ## 运行
+
+可从 GitHub Releases 下载 `ArkLog-windows-x86_64.exe`、
+`ArkLog-macos-x86_64` 或 `ArkLog-macos-aarch64`。
+macOS 首次运行前需要赋予执行权限：
+
+```bash
+chmod +x ArkLog-macos-aarch64
+./ArkLog-macos-aarch64
+```
 
 要求 Rust 1.85+ 和可用的 HarmonyOS `hdc`：
 
@@ -48,16 +58,20 @@ cargo run -p arklog --release
 ## 键盘操作
 
 - `Tab`：切换 HiLog/Fault Log
-- `S`：启动/停止 HiLog
-- `R`：刷新设备或当前 Fault Log
-- `←`/`→`：切换设备
-- `/`：编辑正则过滤
+- `Ctrl+D`：打开/关闭设备连接列表
+- `Ctrl+S`：启动/停止 HiLog
+- `Ctrl+R`：刷新设备连接列表或当前 Fault Log
+- `←`/`→`：在设备列表中切换设备
+- `Ctrl+E`：编辑正则过滤
 - `Ctrl+F`：打开视图内查找；`Enter`/`Shift+Enter` 前后定位
-- `n`/`N`：下一个/上一个查找命中
-- `↑`/`↓`、`PageUp`/`PageDown`：滚动日志或选择 Fault Log
-- `G`：回到最新
-- `C`：清空当前 HiLog 会话
-- `Q`：退出
+- `Ctrl+N`/`Ctrl+P`：下一个/上一个查找命中
+- `↑`/`↓`：滚动 HiLog 或选择 Fault Log 条目
+- `PageUp`/`PageDown`：滚动 HiLog 或当前 Fault Log 原始诊断
+- `Ctrl+G`：回到最新
+- `Ctrl+L`：清空当前 HiLog 会话
+- `Ctrl+Q`：退出
+
+普通单字符不会触发命令；在正则和查找输入框中可直接输入文本。
 
 ## 验证
 
@@ -69,7 +83,8 @@ cargo check -p arklog
 ```
 
 `memory:check` 会构建 release 二进制，写入并读取 100,000 条模拟日志，采样进程
-峰值 RSS；达到或超过 50 MiB 时返回失败。
+峰值 RSS，同时保留 2 MiB Fault Log；达到或超过 50 MiB 时返回失败。GitHub CI
+会在 macOS 和 Windows 上执行相同门禁。
 
 ## 结构
 

@@ -1,6 +1,8 @@
 use std::io;
 use std::time::Instant;
 
+use arklog_core::{CommandOutput, CommandRunner, HdcClient};
+
 use crate::SessionLogStore;
 
 pub const MEMORY_BUDGET_BYTES: u64 = 50 * 1024 * 1024;
@@ -10,6 +12,7 @@ pub struct MemoryProbe {
     pub raw_count: u64,
     pub visible_count: u64,
     pub find_count: u64,
+    pub fault_log_bytes: usize,
     pub retained_heap_bytes: usize,
     pub rss_bytes: u64,
     pub append_millis: u128,
@@ -41,16 +44,41 @@ pub fn run_memory_probe(line_count: u64) -> io::Result<MemoryProbe> {
             "memory probe could not read the latest window",
         ));
     }
+    let fault_result = HdcClient::with_runner("hdc", MemoryProbeFaultRunner)
+        .list_fault_logs("MEMORY-PROBE")
+        .map_err(io::Error::other)?;
+    let fault_log_bytes = fault_result
+        .entries
+        .iter()
+        .map(|entry| entry.raw.len())
+        .sum();
     Ok(MemoryProbe {
         raw_count: store.raw_count(),
         visible_count: store.visible_count(),
         find_count: store.find_count(),
+        fault_log_bytes,
         retained_heap_bytes: store.retained_heap_bytes(),
         rss_bytes: process_peak_rss_bytes()?,
         append_millis,
         filter_millis,
         find_millis,
     })
+}
+
+struct MemoryProbeFaultRunner;
+
+impl CommandRunner for MemoryProbeFaultRunner {
+    fn output(&self, _program: &str, _args: &[String]) -> Result<CommandOutput, String> {
+        const FAULT_BYTES: usize = 2 * 1024 * 1024;
+        let mut stdout = Vec::with_capacity(FAULT_BYTES + 32);
+        stdout.extend_from_slice(b"Reason: MEMORY_PROBE\nSummary: ");
+        stdout.resize(FAULT_BYTES + 32, b'x');
+        Ok(CommandOutput {
+            success: true,
+            stdout,
+            stderr: Vec::new(),
+        })
+    }
 }
 
 #[cfg(target_os = "macos")]

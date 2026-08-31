@@ -101,3 +101,29 @@ fn find_index_rebuilds_after_filter_changes_and_indexes_later_lines() {
     assert_eq!(store.find_count(), 2);
     assert_eq!(store.find_visible_index(1).expect("rebuilt match"), Some(1));
 }
+
+#[test]
+fn query_rebuilds_scan_raw_logs_once_and_find_only_scans_visible_records() {
+    let mut store = SessionLogStore::new().expect("session store");
+    store
+        .append_lines(["keep needle", "drop needle", "keep other", "drop other"])
+        .expect("lines");
+    store.set_find("needle").expect("initial find");
+
+    store.set_filter("^keep").expect("filter and find rebuild");
+    let filter_work = store.last_rebuild_work();
+    assert_eq!(filter_work.raw_records_scanned, 4);
+    assert_eq!(filter_work.visible_records_scanned, 0);
+    assert_eq!(store.find_count(), 1);
+
+    store.set_filter("^keep").expect("unchanged filter");
+    let unchanged_work = store.last_rebuild_work();
+    assert_eq!(unchanged_work.raw_records_scanned, 0);
+    assert_eq!(unchanged_work.visible_records_scanned, 0);
+
+    store.set_find("other").expect("visible-only find rebuild");
+    let find_work = store.last_rebuild_work();
+    assert_eq!(find_work.raw_records_scanned, 0);
+    assert_eq!(find_work.visible_records_scanned, 2);
+    assert_eq!(store.find_count(), 1);
+}

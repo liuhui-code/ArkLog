@@ -1,11 +1,18 @@
+mod action_status;
+mod background_job;
 mod controller;
+mod keymap;
 mod memory;
+mod runtime_state;
 mod session_store;
 mod state;
 mod ui;
 
+pub use action_status::ActionStatus;
 pub use controller::ArkLogController;
+pub use keymap::{AppCommand, CommandContext, CommandKeymap};
 pub use memory::{run_memory_probe, MemoryProbe, MEMORY_BUDGET_BYTES};
-pub use session_store::SessionLogStore;
+pub use runtime_state::{ConnectionState, FaultLogState, StreamState};
+pub use session_store::{QueryRebuildWork, SessionLogStore};
 pub use state::{ArkLogState, LogTab};
-pub use ui::{render_app, AppView, InputMode};
+pub use ui::{render_app, AppView, InputMode, OverlayMode};

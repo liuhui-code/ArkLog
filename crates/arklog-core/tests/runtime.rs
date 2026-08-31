@@ -42,6 +42,42 @@ fn stop_waits_for_the_final_partial_batch_to_be_delivered() {
 }
 
 #[test]
+fn reaps_and_reports_a_stream_that_exited_without_a_stop_request() {
+    let sink = Arc::new(RecordingSink::default());
+    let runtime = DeviceLogRuntime::new(fixture_path().to_string_lossy());
+    let stream = runtime.start_stream("EXIT-01", sink).expect("start stream");
+    let deadline = Instant::now() + Duration::from_secs(3);
+
+    let observed = loop {
+        if let Some(exit) = runtime
+            .finished_stream_status(&stream.stream_id)
+            .expect("inspect stream")
+        {
+            break exit;
+        }
+        assert!(Instant::now() < deadline, "stream exit was not observed");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(observed.code, Some(7));
+    assert!(runtime.has_stream(&stream.stream_id));
+
+    let exit = loop {
+        if let Some(exit) = runtime
+            .reap_finished_stream(&stream.stream_id)
+            .expect("poll stream")
+        {
+            break exit;
+        }
+        assert!(Instant::now() < deadline, "stream exit was not observed");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+
+    assert!(!exit.success);
+    assert_eq!(exit.code, Some(7));
+    assert!(!runtime.has_stream(&stream.stream_id));
+}
+
+#[test]
 fn rejects_an_empty_device_id_before_launching_hdc() {
     let runtime = DeviceLogRuntime::new("hdc");
 

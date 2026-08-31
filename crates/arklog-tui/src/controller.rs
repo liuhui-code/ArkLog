@@ -4,16 +4,23 @@ use std::thread;
 use std::time::Duration;
 
 use arklog_core::{
-    DeviceFaultLogFetchResult, DeviceFaultLogRawEntry, DeviceLogDevice, DeviceLogOutputBatch,
-    DeviceLogRuntime, HdcClient, LogBatchSink,
+    DeviceFaultLogFetchResult, DeviceFaultLogRawEntry, DeviceFaultLogStatus, DeviceLogDevice,
+    DeviceLogOutputBatch, DeviceLogRuntime, DeviceLogStreamExit, HdcClient,
 };
 
-use crate::ArkLogState;
+use crate::background_job::BackgroundJob;
+use crate::{ArkLogState, ConnectionState, FaultLogState, StreamState};
+
+mod background;
+mod stream_health;
+mod stream_sink;
+use stream_sink::ChannelLogSink;
 
 const LOG_CHANNEL_BATCHES: usize = 8;
 
 pub struct ArkLogController {
     state: ArkLogState,
+    executable: String,
     hdc: HdcClient,
     runtime: Arc<DeviceLogRuntime>,
     devices: Vec<DeviceLogDevice>,
@@ -21,17 +28,30 @@ pub struct ArkLogController {
     batch_sender: SyncSender<DeviceLogOutputBatch>,
     batch_receiver: Receiver<DeviceLogOutputBatch>,
     active_stream: Option<String>,
-    runtime_status: String,
     fault_result: Option<DeviceFaultLogFetchResult>,
     selected_fault: usize,
+    connection_state: ConnectionState,
+    stream_state: StreamState,
+    device_refresh: BackgroundJob<Vec<DeviceLogDevice>>,
+    fault_state: FaultLogState,
+    fault_refresh: BackgroundJob<DeviceFaultLogFetchResult>,
+    fault_refresh_device_id: Option<String>,
+    stream_stop: BackgroundJob<()>,
+    stream_reap: BackgroundJob<DeviceLogStreamExit>,
 }
 
 impl ArkLogController {
     pub fn discover(executable: impl Into<String>) -> Result<Self, String> {
         let executable = executable.into();
         let hdc = HdcClient::new(executable.clone());
-        let devices = hdc.list_devices().unwrap_or_default();
-        Self::new(executable, devices)
+        match hdc.list_devices() {
+            Ok(devices) => Self::new(executable, devices),
+            Err(error) => {
+                let mut controller = Self::new(executable, Vec::new())?;
+                controller.connection_state = ConnectionState::Error(error.clone());
+                Ok(controller)
+            }
+        }
     }
 
     pub fn new(
@@ -39,24 +59,46 @@ impl ArkLogController {
         devices: Vec<DeviceLogDevice>,
     ) -> Result<Self, String> {
         let executable = executable.into();
+        let runtime = Arc::new(DeviceLogRuntime::new(executable.clone()));
+        Self::with_runtime(executable, devices, runtime)
+    }
+
+    pub fn with_runtime(
+        executable: impl Into<String>,
+        devices: Vec<DeviceLogDevice>,
+        runtime: Arc<DeviceLogRuntime>,
+    ) -> Result<Self, String> {
+        let executable = executable.into();
         let (batch_sender, batch_receiver) = mpsc::sync_channel(LOG_CHANNEL_BATCHES);
-        let runtime_status = if devices.is_empty() {
-            "No devices".to_string()
+        let connection_state = if devices.is_empty() {
+            ConnectionState::NoDevices
         } else {
-            "Ready".to_string()
+            ConnectionState::Ready
         };
+        let selected_device = devices
+            .iter()
+            .position(|device| device.status == "online")
+            .unwrap_or(0);
         Ok(Self {
             state: ArkLogState::new().map_err(|error| error.to_string())?,
+            executable: executable.clone(),
             hdc: HdcClient::new(executable.clone()),
-            runtime: Arc::new(DeviceLogRuntime::new(executable)),
+            runtime,
             devices,
-            selected_device: 0,
+            selected_device,
             batch_sender,
             batch_receiver,
             active_stream: None,
-            runtime_status,
             fault_result: None,
             selected_fault: 0,
+            connection_state,
+            stream_state: StreamState::Stopped,
+            device_refresh: BackgroundJob::new(),
+            fault_state: FaultLogState::Idle,
+            fault_refresh: BackgroundJob::new(),
+            fault_refresh_device_id: None,
+            stream_stop: BackgroundJob::new(),
+            stream_reap: BackgroundJob::new(),
         })
     }
 
@@ -76,39 +118,89 @@ impl ArkLogController {
         self.devices.get(self.selected_device)
     }
 
-    pub fn runtime_status(&self) -> &str {
-        &self.runtime_status
+    pub fn selected_device_index(&self) -> usize {
+        self.selected_device
+    }
+
+    pub fn connection_state(&self) -> &ConnectionState {
+        &self.connection_state
+    }
+
+    pub fn stream_state(&self) -> &StreamState {
+        &self.stream_state
+    }
+
+    pub fn fault_state(&self) -> &FaultLogState {
+        &self.fault_state
+    }
+
+    pub fn active_stream_id(&self) -> Option<&str> {
+        self.active_stream.as_deref()
     }
 
     pub fn is_streaming(&self) -> bool {
         self.active_stream.is_some()
     }
 
+    pub fn stream_is_live(&self) -> bool {
+        self.stream_state == StreamState::Streaming
+    }
+
     pub fn start_stream(&mut self) -> Result<(), String> {
         if self.is_streaming() {
             return Ok(());
         }
-        let device = self
-            .selected_device()
-            .ok_or_else(|| "No devices".to_string())?;
+        self.stream_state = StreamState::Starting;
+        let Some(device) = self.selected_device() else {
+            let error = self.connection_state.message().to_string();
+            self.stream_state = StreamState::Error {
+                message: error.clone(),
+                active: false,
+            };
+            return Err(error);
+        };
         if device.status != "online" {
-            return Err(format!("Device {} is {}", device.id, device.status));
+            let error = format!("Device {} is {}", device.id, device.status);
+            self.stream_state = StreamState::Error {
+                message: error.clone(),
+                active: false,
+            };
+            return Err(error);
         }
         let device_id = device.id.clone();
         self.state.clear().map_err(|error| error.to_string())?;
         let sink = Arc::new(ChannelLogSink {
             sender: self.batch_sender.clone(),
         });
-        let stream = self.runtime.start_stream(&device_id, sink)?;
+        let stream = match self.runtime.start_stream(&device_id, sink) {
+            Ok(stream) => stream,
+            Err(error) => {
+                self.stream_state = StreamState::Error {
+                    message: error.clone(),
+                    active: false,
+                };
+                return Err(error);
+            }
+        };
         self.active_stream = Some(stream.stream_id);
-        self.runtime_status = "Streaming".to_string();
+        self.stream_state = StreamState::Streaming;
         Ok(())
     }
 
     pub fn stop_stream(&mut self) -> Result<(), String> {
+        if self.stream_stop.is_running() {
+            return Err("Stream stop is already running".to_string());
+        }
+        while self.stream_reap.is_running() {
+            self.pump_log_batches()?;
+            self.poll_stream_health()?;
+            thread::sleep(Duration::from_millis(10));
+        }
         let Some(stream_id) = self.active_stream.clone() else {
+            self.stream_state = StreamState::Stopped;
             return Ok(());
         };
+        self.stream_state = StreamState::Stopping;
         let runtime = Arc::clone(&self.runtime);
         let stopping_id = stream_id.clone();
         let (done_sender, done_receiver) = mpsc::sync_channel(1);
@@ -126,42 +218,99 @@ impl ArkLogController {
             }
         };
         self.pump_log_batches()?;
-        self.active_stream = None;
-        self.runtime_status = "Stopped".to_string();
-        stop_result
+        self.apply_stop_result(&stream_id, stop_result)
+    }
+
+    pub fn request_stop_stream(&mut self) -> Result<(), String> {
+        if self.stream_stop.is_running() || self.stream_reap.is_running() {
+            return Ok(());
+        }
+        let Some(stream_id) = self.active_stream.clone() else {
+            self.stream_state = StreamState::Stopped;
+            return Ok(());
+        };
+        let runtime = Arc::clone(&self.runtime);
+        self.stream_stop
+            .start(move || runtime.stop_stream(&stream_id))?;
+        self.stream_state = StreamState::Stopping;
+        Ok(())
     }
 
     pub fn pump_log_batches(&mut self) -> Result<(), String> {
-        loop {
+        self.pump_log_batches_limited(usize::MAX).map(|_| ())
+    }
+
+    pub fn pump_log_batches_limited(&mut self, max_batches: usize) -> Result<usize, String> {
+        let mut processed = 0;
+        while processed < max_batches {
             match self.batch_receiver.try_recv() {
                 Ok(batch) if self.active_stream.as_deref() == Some(&batch.stream_id) => {
                     self.state
                         .append_lines(batch.lines)
                         .map_err(|error| error.to_string())?;
+                    processed += 1;
                 }
-                Ok(_) => {}
-                Err(TryRecvError::Empty) => return Ok(()),
+                Ok(_) => processed += 1,
+                Err(TryRecvError::Empty) => return Ok(processed),
                 Err(TryRecvError::Disconnected) => {
                     return Err("Log channel disconnected".to_string());
                 }
             }
         }
+        Ok(processed)
     }
 
     pub fn refresh_devices(&mut self) -> Result<(), String> {
-        if self.is_streaming() {
-            return Err("Stop HiLog before refreshing devices".to_string());
+        let devices = match self.hdc.list_devices() {
+            Ok(devices) => devices,
+            Err(error) => {
+                self.connection_state = ConnectionState::Error(error.clone());
+                return Err(error);
+            }
+        };
+        self.apply_discovered_devices(devices, false)
+    }
+
+    pub fn request_device_refresh(&mut self) -> Result<(), String> {
+        if self.device_refresh.is_running() {
+            return Ok(());
         }
-        self.devices = self.hdc.list_devices()?;
-        self.selected_device = self
-            .selected_device
-            .min(self.devices.len().saturating_sub(1));
+        let executable = self.executable.clone();
+        self.device_refresh
+            .start(move || HdcClient::new(executable).list_devices())?;
+        self.connection_state = ConnectionState::Refreshing;
+        Ok(())
+    }
+
+    fn apply_discovered_devices(
+        &mut self,
+        devices: Vec<DeviceLogDevice>,
+        stop_in_background: bool,
+    ) -> Result<(), String> {
+        let selected_id = self.selected_device().map(|device| device.id.clone());
+        let selected_is_online = selected_id.as_deref().is_some_and(|id| {
+            devices
+                .iter()
+                .any(|device| device.id == id && device.status == "online")
+        });
+        if self.is_streaming() && !selected_is_online {
+            if stop_in_background {
+                self.request_stop_stream()?;
+            } else {
+                self.stop_stream()?;
+            }
+        }
+        self.selected_device = selected_id
+            .and_then(|id| devices.iter().position(|device| device.id == id))
+            .or_else(|| devices.iter().position(|device| device.status == "online"))
+            .unwrap_or(0);
+        self.devices = devices;
         self.fault_result = None;
         self.selected_fault = 0;
-        self.runtime_status = if self.devices.is_empty() {
-            "No devices".to_string()
+        self.connection_state = if self.devices.is_empty() {
+            ConnectionState::NoDevices
         } else {
-            "Ready".to_string()
+            ConnectionState::Ready
         };
         Ok(())
     }
@@ -191,10 +340,36 @@ impl ArkLogController {
             .ok_or_else(|| "No devices".to_string())?
             .id
             .clone();
-        let result = self.hdc.list_fault_logs(&device_id)?;
-        self.selected_fault = 0;
-        self.runtime_status = result.message.clone();
-        self.fault_result = Some(result);
+        let result = match self.hdc.list_fault_logs(&device_id) {
+            Ok(result) => result,
+            Err(error) => {
+                self.fault_state = FaultLogState::Error(error.clone());
+                return Err(error);
+            }
+        };
+        self.apply_fault_result(result);
+        Ok(())
+    }
+
+    pub fn request_fault_log_refresh(&mut self) -> Result<(), String> {
+        if self.fault_refresh.is_running() {
+            return Ok(());
+        }
+        let device_id = self
+            .selected_device()
+            .ok_or_else(|| self.connection_state.message().to_string())?
+            .id
+            .clone();
+        let executable = self.executable.clone();
+        self.fault_refresh
+            .start(move || HdcClient::new(executable).list_fault_logs(&device_id))?;
+        self.fault_refresh_device_id = Some(
+            self.selected_device()
+                .expect("device existed when refresh started")
+                .id
+                .clone(),
+        );
+        self.fault_state = FaultLogState::Refreshing;
         Ok(())
     }
 
@@ -208,6 +383,17 @@ impl ArkLogController {
 
     pub fn selected_fault_entry(&self) -> Option<&DeviceFaultLogRawEntry> {
         self.fault_result.as_ref()?.entries.get(self.selected_fault)
+    }
+
+    fn apply_fault_result(&mut self, result: DeviceFaultLogFetchResult) {
+        self.selected_fault = 0;
+        self.fault_state = match result.status {
+            DeviceFaultLogStatus::Ready | DeviceFaultLogStatus::Empty => FaultLogState::Ready,
+            DeviceFaultLogStatus::Unavailable
+            | DeviceFaultLogStatus::Unauthorized
+            | DeviceFaultLogStatus::Error => FaultLogState::Error(result.message.clone()),
+        };
+        self.fault_result = Some(result);
     }
 
     pub fn next_fault(&mut self) {
@@ -242,23 +428,31 @@ impl ArkLogController {
         self.state.clear().map_err(|error| error.to_string())?;
         self.fault_result = None;
         self.selected_fault = 0;
-        self.runtime_status = "Ready".to_string();
+        self.fault_state = FaultLogState::Idle;
         Ok(())
     }
-}
 
-impl Drop for ArkLogController {
-    fn drop(&mut self) {
-        let _ = self.stop_stream();
-    }
-}
-
-struct ChannelLogSink {
-    sender: SyncSender<DeviceLogOutputBatch>,
-}
-
-impl LogBatchSink for ChannelLogSink {
-    fn deliver(&self, batch: DeviceLogOutputBatch) {
-        let _ = self.sender.send(batch);
+    fn apply_stop_result(
+        &mut self,
+        stream_id: &str,
+        result: Result<(), String>,
+    ) -> Result<(), String> {
+        let active = !stream_id.is_empty() && self.runtime.has_stream(stream_id);
+        if !active {
+            self.active_stream = None;
+        }
+        match result {
+            Ok(()) => {
+                self.stream_state = StreamState::Stopped;
+                Ok(())
+            }
+            Err(error) => {
+                self.stream_state = StreamState::Error {
+                    message: error.clone(),
+                    active,
+                };
+                Err(error)
+            }
+        }
     }
 }
