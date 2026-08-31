@@ -38,6 +38,7 @@ fn version_tag_builds_and_publishes_windows_and_macos_executables() {
         "uses: actions/download-artifact@v8",
         "pattern: ArkLog-*",
         "merge-multiple: true",
+        "GH_REPO: ${{ github.repository }}",
         "gh release create",
     ] {
         assert!(
