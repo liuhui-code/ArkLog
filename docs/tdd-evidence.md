@@ -2,6 +2,32 @@
 
 Parent state: new repository with no history. ArkLine reference revision: `e8e91334ecc71db172be01d623c79cafb731987d`.
 
+## Tokenized compact Ratatui workspace
+
+Specification: `docs/specs/terminal-visual-theme.md`.
+
+RED commands and observed failures, one vertical slice at a time:
+
+- focused `ui` render test: HiLog began on row 8 instead of row 5 and ended above a two-row footer;
+- focused `theme_ui` test: Fatal styling colored and bolded the entire log row instead of only `F`;
+- focused `stream_status_ui` test: removing the footer made the last action error invisible;
+- focused token-ownership test: `ui.rs` and `input_ui.rs` still constructed styles and owned raw layout values;
+- focused optional-line-number test: a prefixed row number prevented the real HiLog Level field from receiving its semantic style;
+- focused status-migration test: visible/raw counts and Find position disappeared with the footer.
+
+GREEN commands:
+
+- `cargo test -p arklog --test ui`
+- `cargo test -p arklog --test theme_ui`
+- `cargo test -p arklog --test stream_status_ui`
+- `cargo test -p arklog --test ui_input`
+
+Protected behavior: a single three-row top control band and no footer maximize the full-width
+HiLog viewport; errors and counts remain visible without consuming content rows; only the parsed
+Level field is level-colored; optional line numbers and all other fields remain neutral; active
+regex/Find matches are local; current rows use background only; and all visual styles and
+design-owned dimensions come from the theme layer.
+
 ## Ratatui low-memory runtime
 
 Specification: `docs/specs/ratatui-low-memory-runtime.md`.

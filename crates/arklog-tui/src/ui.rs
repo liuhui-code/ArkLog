@@ -1,7 +1,6 @@
 use arklog_core::{DeviceFaultLogFetchResult, DeviceLogDevice};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph, Tabs},
     Frame,
@@ -55,23 +54,21 @@ pub struct AppView<'a> {
 
 pub fn render_app(frame: &mut Frame, view: AppView<'_>) {
     frame.render_widget(Block::new().style(theme::canvas()), frame.area());
-    if frame.area().width < 72 || frame.area().height < 16 {
+    if frame.area().width < theme::MIN_TERMINAL_WIDTH
+        || frame.area().height < theme::MIN_TERMINAL_HEIGHT
+    {
         frame.render_widget(
-            Paragraph::new("ArkLog needs at least 72 x 16 terminal cells")
-                .block(theme::panel(" TERMINAL TOO SMALL ")),
+            Paragraph::new(theme::MIN_TERMINAL_MESSAGE).block(theme::panel(" TERMINAL TOO SMALL ")),
             frame.area(),
         );
         return;
     }
-    let [header, query, workspace, footer] = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Length(3),
+    let [controls, workspace] = Layout::vertical([
+        Constraint::Length(theme::TOP_CONTROLS_HEIGHT),
         Constraint::Fill(1),
-        Constraint::Length(2),
     ])
     .areas(frame.area());
-    render_header(frame, header, &view);
-    render_query(frame, query, &view);
+    render_header(frame, controls, &view);
     if view.overlay == OverlayMode::Devices {
         render_devices(frame, workspace, &view);
     } else {
@@ -80,31 +77,42 @@ pub fn render_app(frame: &mut Frame, view: AppView<'_>) {
             LogTab::FaultLog => render_fault_log(frame, workspace, &view),
         }
     }
-    render_footer(frame, footer, &view);
 }
 
 fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
     let connection_is_ready = view.connection_status == "Devices ready";
-    let constraints = if view.device_id.is_none() {
+    let constraints = if view.device_id.is_none()
+        && matches!(view.input_mode, InputMode::Filter | InputMode::Find)
+    {
         [
-            Constraint::Length(56),
+            Constraint::Length(theme::EDITING_DEVICE_WIDTH),
+            Constraint::Length(theme::LOG_TABS_WIDTH),
             Constraint::Fill(1),
-            Constraint::Length(0),
+            Constraint::Length(theme::HIDDEN_STREAM_WIDTH),
+        ]
+    } else if view.device_id.is_none() {
+        [
+            Constraint::Length(theme::EMPTY_DEVICE_WIDTH),
+            Constraint::Length(theme::LOG_TABS_WIDTH),
+            Constraint::Fill(1),
+            Constraint::Length(theme::HIDDEN_STREAM_WIDTH),
         ]
     } else if !connection_is_ready {
         [
-            Constraint::Length(66),
+            Constraint::Length(theme::STALE_DEVICE_WIDTH),
+            Constraint::Length(theme::LOG_TABS_WIDTH),
             Constraint::Fill(1),
-            Constraint::Length(30),
+            Constraint::Length(theme::COMPACT_STREAM_STATUS_WIDTH),
         ]
     } else {
         [
-            Constraint::Length(29),
+            Constraint::Length(theme::READY_DEVICE_WIDTH),
+            Constraint::Length(theme::LOG_TABS_WIDTH),
             Constraint::Fill(1),
-            Constraint::Length(30),
+            Constraint::Length(theme::STREAM_STATUS_WIDTH),
         ]
     };
-    let [device, tabs, stream] = Layout::horizontal(constraints).areas(area);
+    let [device, tabs, query, stream] = Layout::horizontal(constraints).areas(area);
     let pending_hint = match view.pending_stream_action {
         Some(StreamAction::Start) => " · START QUEUED",
         Some(StreamAction::Stop) => " · STOP QUEUED",
@@ -113,22 +121,30 @@ fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
     let device_line = match view.device_id {
         Some(id) => {
             let mut spans = vec![
-                Span::styled("● ", Style::new().fg(connection_color(view.device_status))),
-                Span::styled(id, Style::new().add_modifier(Modifier::BOLD)),
-                Span::raw(format!("  {}", view.device_status.to_ascii_uppercase())),
+                Span::styled("● ", theme::connection_status(view.device_status)),
+                Span::styled(id, theme::emphasized_text()),
+                Span::raw(format!(
+                    "{}{}",
+                    theme::DEVICE_FIELD_GAP,
+                    view.device_status.to_ascii_uppercase()
+                )),
             ];
             if !connection_is_ready {
-                spans.push(Span::raw(format!(" · {}", view.connection_status)));
+                spans.push(Span::raw(format!(
+                    "{}{}",
+                    theme::STATUS_SEPARATOR,
+                    view.connection_status
+                )));
             }
             Line::from(spans)
         }
         None if view.connection_status == "No devices" => Line::styled(
             format!("No devices{pending_hint}"),
-            Style::new().fg(theme::WARNING),
+            theme::text(theme::Tone::Warning),
         ),
         None => Line::styled(
             format!("No devices · {}{pending_hint}", view.connection_status),
-            Style::new().fg(theme::WARNING),
+            theme::text(theme::Tone::Warning),
         ),
     };
     frame.render_widget(
@@ -139,21 +155,18 @@ fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
         Tabs::new([" HiLog ", " Fault Log "])
             .select(usize::from(view.tab == LogTab::FaultLog))
             .divider("│")
-            .highlight_style(
-                Style::new()
-                    .fg(theme::ACCENT)
-                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            )
+            .highlight_style(theme::selected_tab())
             .block(theme::panel(" LOG VIEWS ")),
         tabs,
     );
-    let (stream_label, color) = match view.stream_state {
-        StreamState::Starting => ("◌ STARTING", theme::INFO),
-        StreamState::Streaming => ("● LIVE", theme::SUCCESS),
-        StreamState::Stopping => ("◌ STOPPING", theme::WARNING),
-        StreamState::Stopped => ("■ STOPPED", theme::WARNING),
-        StreamState::Error { active: true, .. } => ("! ACTIVE", theme::ERROR),
-        StreamState::Error { active: false, .. } => ("! STOPPED", theme::ERROR),
+    render_query(frame, query, view);
+    let (stream_label, tone) = match view.stream_state {
+        StreamState::Starting => ("◌ STARTING", theme::Tone::Info),
+        StreamState::Streaming => ("● LIVE", theme::Tone::Success),
+        StreamState::Stopping => ("◌ STOPPING", theme::Tone::Warning),
+        StreamState::Stopped => ("■ STOPPED", theme::Tone::Warning),
+        StreamState::Error { active: true, .. } => ("! ACTIVE", theme::Tone::Error),
+        StreamState::Error { active: false, .. } => ("! STOPPED", theme::Tone::Error),
     };
     let stream_detail = match (view.stream_state, view.pending_stream_action) {
         (StreamState::Stopping, Some(StreamAction::Start)) => "RESTART QUEUED",
@@ -164,11 +177,8 @@ fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
         Line::from("")
     } else {
         Line::from(vec![
-            Span::styled(
-                stream_label,
-                Style::new().fg(color).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(format!("  {stream_detail}")),
+            Span::styled(stream_label, theme::strong_text(tone)),
+            Span::raw(format!("{}{stream_detail}", theme::DEVICE_FIELD_GAP)),
         ])
     };
     if view.device_id.is_some() {
@@ -180,28 +190,28 @@ fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
 }
 
 fn render_query(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
-    let (title, value, color) = if view.overlay == OverlayMode::Devices {
+    let (title, value, tone) = if view.overlay == OverlayMode::Devices {
         (
             " CONNECTED DEVICES · Ctrl+R refresh · ESC CLOSE ",
             view.connection_status,
-            theme::INFO,
+            theme::Tone::Info,
         )
     } else {
         match view.input_mode {
             InputMode::Filter => (
                 " REGEX FILTER · ENTER APPLY · Ctrl+A/C/X/V/Z ",
                 view.input.text,
-                theme::WARNING,
+                theme::Tone::Warning,
             ),
             InputMode::Find => (
                 " FIND IN HILOG · ENTER NEXT · Ctrl+A/C/X/V/Z ",
                 view.input.text,
-                theme::ACCENT,
+                theme::Tone::Accent,
             ),
             InputMode::Normal if view.tab == LogTab::FaultLog => (
                 " FAULT LOG · Ctrl+R REFRESH ",
                 "Inspect raw device diagnostics",
-                theme::MUTED,
+                theme::Tone::Muted,
             ),
             InputMode::Normal => (
                 " REGEX FILTER · Ctrl+E TO EDIT ",
@@ -210,22 +220,23 @@ fn render_query(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
                 } else {
                     view.filter_query
                 },
-                theme::MUTED,
+                theme::Tone::Muted,
             ),
         }
     };
     if matches!(view.input_mode, InputMode::Filter | InputMode::Find) {
-        render_text_input(frame, area, title, view.input, color);
+        render_text_input(frame, area, title, view.input, tone);
         return;
     }
-    let value = view.filter_error.unwrap_or(value);
-    let color = if view.filter_error.is_some() {
-        theme::ERROR
+    let error = view.action_error.or(view.filter_error);
+    let value = error.unwrap_or(value);
+    let tone = if error.is_some() {
+        theme::Tone::Error
     } else {
-        color
+        tone
     };
     frame.render_widget(
-        Paragraph::new(Span::styled(value, Style::new().fg(color))).block(theme::panel(title)),
+        Paragraph::new(Span::styled(value, theme::text(tone))).block(theme::panel(title)),
         area,
     );
 }
@@ -238,7 +249,7 @@ fn render_devices(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
         );
         return;
     }
-    let height = area.height.saturating_sub(2).max(1) as usize;
+    let height = theme::panel_content_height(area.height);
     let selected = view.selected_device.min(view.devices.len() - 1);
     let latest_start = view.devices.len().saturating_sub(height);
     let start = selected
@@ -253,40 +264,43 @@ fn render_devices(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
         .take(height)
         .map(|(index, device)| {
             let selected = index == view.selected_device;
-            let status_color = connection_color(&device.status);
             Line::from(vec![
                 Span::styled(
-                    if selected { "▶ " } else { "  " },
-                    Style::new().fg(theme::INFO),
+                    if selected {
+                        theme::SELECTED_ROW_MARKER
+                    } else {
+                        theme::UNSELECTED_ROW_MARKER
+                    },
+                    theme::text(theme::Tone::Info),
                 ),
                 Span::styled(
-                    format!("{:<20}", device.id),
-                    Style::new()
-                        .add_modifier(selected.then_some(Modifier::BOLD).unwrap_or_default()),
+                    format!(
+                        "{:<width$}",
+                        device.id,
+                        width = theme::DEVICE_ID_COLUMN_WIDTH
+                    ),
+                    theme::emphasized_text(),
                 ),
                 Span::styled(
-                    format!("{:<13}", device.status.to_ascii_uppercase()),
-                    Style::new().fg(status_color),
+                    format!(
+                        "{:<width$}",
+                        device.status.to_ascii_uppercase(),
+                        width = theme::DEVICE_STATUS_COLUMN_WIDTH
+                    ),
+                    theme::connection_status(&device.status),
                 ),
                 Span::raw(device.detail.clone()),
             ])
+            .style(theme::selected_row(selected))
         })
         .collect::<Vec<_>>();
     frame.render_widget(
         Paragraph::new(rows).block(theme::panel(format!(
-            " CONNECTED DEVICES · {} ",
+            " CONNECTED DEVICES · {} · Ctrl+R refresh ",
             view.devices.len()
         ))),
         area,
     );
-}
-
-fn connection_color(status: &str) -> Color {
-    match status {
-        "online" => theme::SUCCESS,
-        "offline" => theme::WARNING,
-        _ => theme::ERROR,
-    }
 }
 
 fn render_hilog(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
@@ -300,11 +314,15 @@ fn render_hilog(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
             styled_log_line(raw, view.active_filter, view.find_query, current)
         })
         .collect::<Vec<_>>();
-    let title = if view.following_latest {
-        " FOLLOWING LATEST "
+    let mode = if view.following_latest {
+        "FOLLOWING LATEST"
     } else {
-        " SCROLL PAUSED · Ctrl+G TO LATEST "
+        "SCROLL PAUSED · Ctrl+G TO LATEST"
     };
+    let title = format!(
+        " {mode} · {} / {} VISIBLE · FIND {}/{} ",
+        view.visible_count, view.raw_count, view.find_status.0, view.find_status.1
+    );
     frame.render_widget(Paragraph::new(lines).block(theme::panel(title)), area);
 }
 
@@ -323,9 +341,12 @@ fn render_fault_log(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
         );
         return;
     }
-    let [list, inspector] =
-        Layout::horizontal([Constraint::Percentage(32), Constraint::Fill(1)]).areas(area);
-    let list_height = list.height.saturating_sub(2).max(1) as usize;
+    let [list, inspector] = Layout::horizontal([
+        Constraint::Percentage(theme::FAULT_LIST_PERCENT),
+        Constraint::Fill(1),
+    ])
+    .areas(area);
+    let list_height = theme::panel_content_height(list.height);
     let selected = view.selected_fault.min(result.entries.len() - 1);
     let list_start = selected
         .saturating_add(1)
@@ -338,20 +359,15 @@ fn render_fault_log(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
         .skip(list_start)
         .take(list_height)
         .map(|(index, entry)| {
-            let style = if index == view.selected_fault {
-                Style::new()
-                    .fg(theme::INFO)
-                    .bg(theme::SURFACE_0)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::new()
-            };
-            Line::styled(format!("{}  {}", index + 1, entry.id), style)
+            Line::styled(
+                format!("{}{}{}", index + 1, theme::DEVICE_FIELD_GAP, entry.id),
+                theme::selected_row(index == view.selected_fault),
+            )
         })
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(rows).block(theme::panel(" ENTRIES ")), list);
     let raw = &result.entries[selected].raw;
-    let inspector_height = inspector.height.saturating_sub(2).max(1) as usize;
+    let inspector_height = theme::panel_content_height(inspector.height);
     let visible_raw = raw
         .lines()
         .skip(view.fault_scroll)
@@ -359,34 +375,8 @@ fn render_fault_log(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
         .map(|line| Line::raw(line.to_string()))
         .collect::<Vec<_>>();
     frame.render_widget(
-        Paragraph::new(visible_raw).block(theme::panel(" RAW DIAGNOSTIC ")),
+        Paragraph::new(visible_raw).block(theme::panel(" RAW DIAGNOSTIC · PgUp/PgDn inspect ")),
         inspector,
-    );
-}
-
-fn render_footer(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
-    let status = view.action_error.map_or_else(
-        || {
-            Line::from(format!(
-                " {:>7} / {:>7} VISIBLE  │  FIND {}/{}",
-                view.visible_count, view.raw_count, view.find_status.0, view.find_status.1
-            ))
-        },
-        |error| Line::styled(format!(" ERROR · {error}"), Style::new().fg(theme::ERROR)),
-    );
-    let shortcuts = if view.overlay == OverlayMode::Devices {
-        " ←/→ select  Esc close  Ctrl+R refresh  Ctrl+S stream  Ctrl+D close  Ctrl+Q quit"
-    } else if view.tab == LogTab::FaultLog {
-        " ↑/↓ entry  PgUp/PgDn inspect  Ctrl+R refresh  Ctrl+D devices  Ctrl+S stream  Ctrl+Q quit"
-    } else {
-        " Tab view  Ctrl+S stream  Ctrl+L clear  Ctrl+Q quit  Ctrl+E regex  Ctrl+F find  Ctrl+D devices  Ctrl+R refresh"
-    };
-    frame.render_widget(
-        Paragraph::new(vec![
-            status,
-            Line::styled(shortcuts, Style::new().fg(theme::MUTED)),
-        ]),
-        area,
     );
 }
 
@@ -396,10 +386,7 @@ fn styled_log_line(
     find_query: &str,
     current_find: bool,
 ) -> Line<'static> {
-    let mut base = theme::log_line(raw);
-    if current_find {
-        base = theme::current_match_line(base);
-    }
+    let level = log_level_field(raw);
     let filter_ranges = filter
         .into_iter()
         .flat_map(|filter| filter.find_iter(raw))
@@ -407,10 +394,16 @@ fn styled_log_line(
         .map(|found| found.start()..found.end())
         .collect::<Vec<_>>();
     let find_ranges = literal_match_ranges(raw, find_query);
-    if filter_ranges.is_empty() && find_ranges.is_empty() {
-        return Line::styled(raw.to_string(), base);
+    if filter_ranges.is_empty() && find_ranges.is_empty() && level.is_none() {
+        return Line::styled(
+            raw.to_string(),
+            theme::log_span(None, current_find, false, false),
+        );
     }
     let mut boundaries = vec![0, raw.len()];
+    if let Some((range, _)) = &level {
+        boundaries.extend([range.start, range.end]);
+    }
     for range in filter_ranges.iter().chain(&find_ranges) {
         boundaries.extend([range.start, range.end]);
     }
@@ -420,16 +413,51 @@ fn styled_log_line(
     for boundary in boundaries.windows(2) {
         let start = boundary[0];
         let end = boundary[1];
-        let mut style = base;
-        if find_ranges.iter().any(|range| range.contains(&start)) {
-            style = theme::find_match(style);
-        }
-        if filter_ranges.iter().any(|range| range.contains(&start)) {
-            style = theme::filter_match(style);
-        }
+        let span_level = level
+            .as_ref()
+            .filter(|(range, _)| range.contains(&start))
+            .map(|(_, level)| *level);
+        let style = theme::log_span(
+            span_level,
+            current_find,
+            find_ranges.iter().any(|range| range.contains(&start)),
+            filter_ranges.iter().any(|range| range.contains(&start)),
+        );
         spans.push(Span::styled(raw[start..end].to_string(), style));
     }
     Line::from(spans)
+}
+
+fn log_level_field(raw: &str) -> Option<(std::ops::Range<usize>, theme::LogLevel)> {
+    let fields = raw
+        .split_whitespace()
+        .map(|field| {
+            let start = field.as_ptr() as usize - raw.as_ptr() as usize;
+            (start..start + field.len(), field)
+        })
+        .collect::<Vec<_>>();
+    let standard_start = usize::from(
+        fields.len() >= 6
+            && fields[0].1.parse::<u64>().is_ok()
+            && fields[1].1.contains('-')
+            && fields[2].1.contains(':'),
+    );
+    let candidate = if fields.len() >= standard_start + 5
+        && fields[standard_start].1.contains('-')
+        && fields[standard_start + 1].1.contains(':')
+        && fields[standard_start + 2].1.parse::<u64>().is_ok()
+        && fields[standard_start + 3].1.parse::<u64>().is_ok()
+    {
+        fields.get(standard_start + 4)
+    } else if fields
+        .first()
+        .is_some_and(|(_, field)| field.parse::<u64>().is_ok())
+    {
+        fields.get(1)
+    } else {
+        None
+    }?;
+    theme::LogLevel::parse(candidate.1).map(|level| (candidate.0.clone(), level))
 }
 
 fn literal_match_ranges(raw: &str, query: &str) -> Vec<std::ops::Range<usize>> {

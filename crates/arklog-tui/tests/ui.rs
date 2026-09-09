@@ -61,8 +61,18 @@ fn renders_compact_shared_workspace_without_duplicate_device_or_hilog_status() {
     assert!(rendered.contains("REGEX FILTER"));
     assert!(rendered.contains("page shown"));
     assert!(rendered.contains("FOLLOWING LATEST"));
-    assert!(rendered.contains("Ctrl+L clear"));
-    assert!(rendered.contains("Ctrl+Q quit"));
+    assert!(rendered.contains("1 / 1 VISIBLE"));
+    assert!(rendered.contains("FIND 0/0"));
+    let buffer = terminal.backend().buffer();
+    let log_start = find_cell_sequence(buffer.content(), "page shown");
+    assert_eq!(
+        log_start / 110,
+        4,
+        "HiLog should begin below one 3-row top bar"
+    );
+    assert_eq!(buffer[(0, 27)].symbol(), "╰");
+    assert_eq!(buffer[(109, 27)].symbol(), "╯");
+    assert!(!rendered.contains("VISIBLE  │  FIND"));
     assert!(!rendered.to_ascii_lowercase().contains("hilog output"));
     assert!(!rendered.to_ascii_lowercase().contains("unavailable"));
 }

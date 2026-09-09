@@ -2,7 +2,7 @@ use arklog::{render_app, AppView, InputMode, LogTab, OverlayMode, StreamState, T
 use ratatui::{backend::TestBackend, Terminal};
 
 #[test]
-fn minimum_width_hilog_view_keeps_clear_shortcut_visible() {
+fn minimum_width_hilog_view_maximizes_log_workspace_without_a_footer() {
     let lines = vec!["0 I live log".to_string()];
     let backend = TestBackend::new(72, 16);
     let mut terminal = Terminal::new(backend).expect("terminal");
@@ -50,5 +50,8 @@ fn minimum_width_hilog_view_keeps_clear_shortcut_visible() {
         .iter()
         .map(|cell| cell.symbol())
         .collect::<String>();
-    assert!(rendered.contains("Ctrl+L clear"));
+    assert!(rendered.contains("live log"));
+    assert!(!rendered.contains("VISIBLE  │  FIND"));
+    assert_eq!(terminal.backend().buffer()[(0, 15)].symbol(), "╰");
+    assert_eq!(terminal.backend().buffer()[(71, 15)].symbol(), "╯");
 }

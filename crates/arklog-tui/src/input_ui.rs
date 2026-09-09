@@ -1,6 +1,5 @@
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -14,22 +13,19 @@ pub(crate) fn render_text_input(
     area: Rect,
     title: &str,
     input: TextInputView<'_>,
-    color: Color,
+    tone: theme::Tone,
 ) {
-    let width = area.width.saturating_sub(2) as usize;
+    let width = theme::input_content_width(area);
     let (visible, cursor_column) = visible_window(input, width);
     frame.render_widget(
-        Paragraph::new(styled_input(visible, color)).block(theme::panel(title)),
+        Paragraph::new(styled_input(visible, tone)).block(theme::panel(title)),
         area,
     );
-    let cursor_x = area
-        .x
-        .saturating_add(1 + cursor_column.min(width.saturating_sub(1)) as u16);
-    frame.set_cursor_position((cursor_x, area.y + 1));
+    frame.set_cursor_position(theme::input_cursor_position(area, cursor_column, width));
 }
 
 fn visible_window(input: TextInputView<'_>, width: usize) -> (TextInputView<'_>, usize) {
-    let cursor_limit = width.saturating_sub(1);
+    let cursor_limit = theme::input_cursor_limit(width);
     let mut start = input.cursor;
     let mut cursor_column = 0;
     for (index, character) in input.text[..input.cursor].char_indices().rev() {
@@ -69,13 +65,13 @@ fn visible_window(input: TextInputView<'_>, width: usize) -> (TextInputView<'_>,
     )
 }
 
-fn styled_input(input: TextInputView<'_>, color: Color) -> Line<'_> {
+fn styled_input(input: TextInputView<'_>, tone: theme::Tone) -> Line<'_> {
     let Some((start, end)) = input.selection else {
-        return Line::from(Span::styled(input.text, Style::new().fg(color)));
+        return Line::from(Span::styled(input.text, theme::text(tone)));
     };
     Line::from(vec![
-        Span::styled(&input.text[..start], Style::new().fg(color)),
-        Span::styled(&input.text[start..end], theme::input_selection(color)),
-        Span::styled(&input.text[end..], Style::new().fg(color)),
+        Span::styled(&input.text[..start], theme::text(tone)),
+        Span::styled(&input.text[start..end], theme::input_selection(tone)),
+        Span::styled(&input.text[end..], theme::text(tone)),
     ])
 }
