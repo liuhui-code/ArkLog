@@ -51,6 +51,10 @@ fn minimum_width_hilog_view_maximizes_log_workspace_without_a_footer() {
         .map(|cell| cell.symbol())
         .collect::<String>();
     assert!(rendered.contains("live log"));
+    assert!(rendered.contains("HiLog"));
+    assert!(rendered.contains("Fault Log"));
+    assert!(rendered.contains("REGEX FILTER"));
+    assert!(rendered.contains("● LIVE"));
     assert!(!rendered.contains("VISIBLE  │  FIND"));
     assert_eq!(terminal.backend().buffer()[(0, 15)].symbol(), "╰");
     assert_eq!(terminal.backend().buffer()[(71, 15)].symbol(), "╯");

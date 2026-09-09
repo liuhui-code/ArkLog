@@ -81,11 +81,22 @@ pub fn render_app(frame: &mut Frame, view: AppView<'_>) {
 
 fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
     let connection_is_ready = view.connection_status == "Devices ready";
-    let constraints = if view.device_id.is_none()
-        && matches!(view.input_mode, InputMode::Filter | InputMode::Find)
-    {
+    let editing_query = matches!(view.input_mode, InputMode::Filter | InputMode::Find);
+    let narrow = area.width < theme::NARROW_CONTROLS_BREAKPOINT;
+    let constraints = if editing_query {
         [
             Constraint::Length(theme::EDITING_DEVICE_WIDTH),
+            Constraint::Length(theme::LOG_TABS_WIDTH),
+            Constraint::Fill(1),
+            Constraint::Length(if view.device_id.is_some() {
+                theme::NARROW_STREAM_STATUS_WIDTH
+            } else {
+                theme::HIDDEN_STREAM_WIDTH
+            }),
+        ]
+    } else if view.device_id.is_none() && narrow {
+        [
+            Constraint::Length(theme::NARROW_EMPTY_DEVICE_WIDTH),
             Constraint::Length(theme::LOG_TABS_WIDTH),
             Constraint::Fill(1),
             Constraint::Length(theme::HIDDEN_STREAM_WIDTH),
@@ -96,6 +107,13 @@ fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
             Constraint::Length(theme::LOG_TABS_WIDTH),
             Constraint::Fill(1),
             Constraint::Length(theme::HIDDEN_STREAM_WIDTH),
+        ]
+    } else if narrow {
+        [
+            Constraint::Length(theme::NARROW_DEVICE_WIDTH),
+            Constraint::Length(theme::LOG_TABS_WIDTH),
+            Constraint::Fill(1),
+            Constraint::Length(theme::NARROW_STREAM_STATUS_WIDTH),
         ]
     } else if !connection_is_ready {
         [
@@ -208,6 +226,12 @@ fn render_query(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
                 view.input.text,
                 theme::Tone::Accent,
             ),
+            InputMode::Normal
+                if view.connection_status != "Devices ready"
+                    && view.connection_status != "No devices" =>
+            {
+                (" CONNECTION ", view.connection_status, theme::Tone::Error)
+            }
             InputMode::Normal if view.tab == LogTab::FaultLog => (
                 " FAULT LOG · Ctrl+R REFRESH ",
                 "Inspect raw device diagnostics",
