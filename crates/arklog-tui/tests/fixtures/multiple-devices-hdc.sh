@@ -1,7 +1,7 @@
 #!/bin/sh
 
 if [ "$1 $2 $3" = "list targets -v" ]; then
-  printf 'USB-OLD USB Offline Phone hdc-1\n'
+  printf 'USB-OLD USB Ready Phone hdc-1\n'
   printf 'USB-NEW USB Ready Phone hdc-2\n'
   exit 0
 fi

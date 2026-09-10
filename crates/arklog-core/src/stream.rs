@@ -1,7 +1,7 @@
 use std::io::{BufRead, BufReader, Read};
 use std::sync::{mpsc, Arc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -51,21 +51,28 @@ where
     thread::spawn(move || {
         let mut lines = Vec::with_capacity(MAX_BATCH_LINES);
         loop {
-            match receiver.recv_timeout(FLUSH_INTERVAL) {
-                Ok(line) => {
-                    lines.push(line);
-                    if lines.len() >= MAX_BATCH_LINES {
-                        deliver(&stream_id, &device_id, &sink, &mut lines);
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    deliver(&stream_id, &device_id, &sink, &mut lines);
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    deliver(&stream_id, &device_id, &sink, &mut lines);
+            let first = match receiver.recv() {
+                Ok(line) => line,
+                Err(_) => break,
+            };
+            lines.push(first);
+            let deadline = Instant::now() + FLUSH_INTERVAL;
+
+            while lines.len() < MAX_BATCH_LINES {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
                     break;
                 }
+                match receiver.recv_timeout(remaining) {
+                    Ok(line) => lines.push(line),
+                    Err(mpsc::RecvTimeoutError::Timeout) => break,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        deliver(&stream_id, &device_id, &sink, &mut lines);
+                        return;
+                    }
+                }
             }
+            deliver(&stream_id, &device_id, &sink, &mut lines);
         }
     })
 }

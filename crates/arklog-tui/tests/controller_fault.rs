@@ -33,6 +33,31 @@ fn refreshes_fault_logs_and_moves_the_raw_inspector_selection() {
 }
 
 #[test]
+fn equivalent_device_refresh_preserves_fault_log_and_selection() {
+    let devices = vec![DeviceLogDevice {
+        id: "USB-01".to_string(),
+        label: "USB-01".to_string(),
+        status: "online".to_string(),
+        detail: "USB-01 Connected".to_string(),
+    }];
+    let mut controller =
+        ArkLogController::new(fixture_path().to_string_lossy(), devices).expect("controller");
+    controller.refresh_fault_logs().expect("fault logs");
+    controller.next_fault();
+
+    controller
+        .refresh_devices()
+        .expect("equivalent device refresh");
+
+    assert_eq!(controller.selected_fault(), 1);
+    assert!(controller
+        .selected_fault_entry()
+        .expect("preserved selected fault")
+        .raw
+        .contains("com.example.second"));
+}
+
+#[test]
 fn changing_device_clears_session_data_before_the_next_stream() {
     let devices = ["USB-01", "USB-02"]
         .into_iter()
@@ -107,17 +132,18 @@ fn fault_result_from_the_previous_device_is_discarded() {
     let mut controller = ArkLogController::new(delayed_fixture_path().to_string_lossy(), devices)
         .expect("controller");
 
+    controller.next_device().expect("explicitly select USB-02");
     controller
         .request_fault_log_refresh()
         .expect("request fault refresh");
-    controller.next_device().expect("select USB-02");
+    controller.next_device().expect("select USB-01");
 
     std::thread::sleep(Duration::from_millis(1_100));
     controller
         .pump_background_tasks()
         .expect("pump background tasks");
-    // The selected device has no request/result; USB-01 data must not leak into it.
-    assert_eq!(controller.selected_device().expect("device").id, "USB-02");
+    // The selected device has no request/result; USB-02 data must not leak into it.
+    assert_eq!(controller.selected_device().expect("device").id, "USB-01");
     assert_eq!(controller.fault_state(), &FaultLogState::Idle);
     assert!(controller.fault_result().is_none());
 }

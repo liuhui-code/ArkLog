@@ -52,6 +52,26 @@ pub struct AppView<'a> {
     pub fault_scroll: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AppLayoutGeometry {
+    pub controls: Rect,
+    pub workspace: Rect,
+    pub log_content_height: usize,
+}
+
+pub fn app_layout(area: Rect) -> AppLayoutGeometry {
+    let [controls, workspace] = Layout::vertical([
+        Constraint::Length(theme::TOP_CONTROLS_HEIGHT),
+        Constraint::Fill(1),
+    ])
+    .areas(area);
+    AppLayoutGeometry {
+        controls,
+        workspace,
+        log_content_height: theme::panel_content_height(workspace.height),
+    }
+}
+
 pub fn render_app(frame: &mut Frame, view: AppView<'_>) {
     frame.render_widget(Block::new().style(theme::canvas()), frame.area());
     if frame.area().width < theme::MIN_TERMINAL_WIDTH
@@ -63,18 +83,14 @@ pub fn render_app(frame: &mut Frame, view: AppView<'_>) {
         );
         return;
     }
-    let [controls, workspace] = Layout::vertical([
-        Constraint::Length(theme::TOP_CONTROLS_HEIGHT),
-        Constraint::Fill(1),
-    ])
-    .areas(frame.area());
-    render_header(frame, controls, &view);
+    let layout = app_layout(frame.area());
+    render_header(frame, layout.controls, &view);
     if view.overlay == OverlayMode::Devices {
-        render_devices(frame, workspace, &view);
+        render_devices(frame, layout.workspace, &view);
     } else {
         match view.tab {
-            LogTab::HiLog => render_hilog(frame, workspace, &view),
-            LogTab::FaultLog => render_fault_log(frame, workspace, &view),
+            LogTab::HiLog => render_hilog(frame, layout.workspace, &view),
+            LogTab::FaultLog => render_fault_log(frame, layout.workspace, &view),
         }
     }
 }
@@ -158,6 +174,10 @@ fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
         }
         None if view.connection_status == "No devices" => Line::styled(
             format!("No devices{pending_hint}"),
+            theme::text(theme::Tone::Warning),
+        ),
+        None if view.connection_status == "Select an online device" => Line::styled(
+            format!("Select device{pending_hint}"),
             theme::text(theme::Tone::Warning),
         ),
         None => Line::styled(

@@ -11,7 +11,10 @@ pub use fault_log::{
     DeviceFaultLogExportResult, DeviceFaultLogExporter, DeviceFaultLogFetchResult,
     DeviceFaultLogRawEntry, DeviceFaultLogStatus,
 };
-pub use runtime::{DeviceLogRuntime, DeviceLogStreamExit, DeviceLogStreamSummary};
+pub use runtime::{
+    DeviceLogRuntime, DeviceLogStartError, DeviceLogStartMode, DeviceLogStreamExit,
+    DeviceLogStreamSummary,
+};
 pub use stream::{spawn_log_reader, DeviceLogOutputBatch, LogBatchSink};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

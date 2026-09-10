@@ -108,6 +108,21 @@ fn initial_selection_prefers_the_first_online_device() {
 }
 
 #[test]
+fn offline_only_snapshot_is_not_ready_to_stream() {
+    let devices = vec![DeviceLogDevice {
+        id: "USB-OFFLINE".to_string(),
+        label: "USB-OFFLINE".to_string(),
+        status: "offline".to_string(),
+        detail: "USB-OFFLINE USB Offline".to_string(),
+    }];
+
+    let controller =
+        ArkLogController::new(fixture_path().to_string_lossy(), devices).expect("controller");
+
+    assert_eq!(controller.connection_state(), &ConnectionState::NoDevices);
+}
+
+#[test]
 fn refreshes_connected_devices_without_interrupting_the_active_stream() {
     let devices = vec![DeviceLogDevice {
         id: "USB-01".to_string(),
@@ -148,6 +163,44 @@ fn refresh_falls_back_to_an_online_device_when_the_previous_device_disappears() 
     controller.refresh_devices().expect("refresh devices");
 
     assert_eq!(controller.selected_device().expect("device").id, "USB-NEW");
+}
+
+#[test]
+fn refresh_keeps_the_current_target_when_it_is_still_online() {
+    let devices = vec![DeviceLogDevice {
+        id: "USB-OLD".to_string(),
+        label: "USB-OLD".to_string(),
+        status: "online".to_string(),
+        detail: "USB-OLD Connected".to_string(),
+    }];
+    let mut controller =
+        ArkLogController::new(multiple_devices_fixture_path().to_string_lossy(), devices)
+            .expect("controller");
+
+    controller.refresh_devices().expect("refresh devices");
+
+    assert_eq!(controller.selected_device().expect("device").id, "USB-OLD");
+}
+
+#[test]
+fn refresh_does_not_guess_when_multiple_online_devices_replace_the_target() {
+    let devices = vec![DeviceLogDevice {
+        id: "USB-MISSING".to_string(),
+        label: "USB-MISSING".to_string(),
+        status: "online".to_string(),
+        detail: "USB-MISSING Connected".to_string(),
+    }];
+    let mut controller =
+        ArkLogController::new(multiple_devices_fixture_path().to_string_lossy(), devices)
+            .expect("controller");
+
+    controller.refresh_devices().expect("refresh devices");
+
+    assert!(controller.selected_device().is_none());
+    assert_eq!(
+        controller.connection_state(),
+        &ConnectionState::SelectionRequired
+    );
 }
 
 #[test]
@@ -219,7 +272,10 @@ fn background_disconnect_never_blocks_while_reaping_the_stale_stream() {
 
     assert_eq!(controller.connection_state(), &ConnectionState::NoDevices);
     assert_eq!(controller.stream_state(), &arklog::StreamState::Stopping);
-    assert!(controller.is_streaming());
+    assert!(
+        !controller.is_streaming(),
+        "a disconnected device is fenced immediately while its worker is reaped"
+    );
 
     while controller.stream_state() == &arklog::StreamState::Stopping && Instant::now() < deadline {
         controller
@@ -355,6 +411,89 @@ fn background_stop_commits_the_final_partial_log_batch() {
 }
 
 #[test]
+fn background_stop_drains_a_full_bounded_batch_channel_until_reap_completes() {
+    let devices = vec![DeviceLogDevice {
+        id: "FULL-STOP".to_string(),
+        label: "FULL-STOP".to_string(),
+        status: "online".to_string(),
+        detail: "FULL-STOP Connected".to_string(),
+    }];
+    let mut controller =
+        ArkLogController::new(fixture_path().to_string_lossy(), devices).expect("controller");
+    controller.start_stream().expect("start burst stream");
+    std::thread::sleep(Duration::from_millis(100));
+
+    controller.request_stop_stream().expect("request stop");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while controller.stream_state() == &arklog::StreamState::Stopping && Instant::now() < deadline {
+        controller
+            .pump_log_batches_limited(8)
+            .expect("drain bounded channel");
+        controller
+            .pump_background_tasks()
+            .expect("poll stop completion");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    assert_eq!(controller.stream_state(), &arklog::StreamState::Stopped);
+    assert!(!controller.is_streaming());
+}
+
+#[test]
+fn device_switch_discards_the_old_streams_late_partial_batch() {
+    let devices = vec![DeviceLogDevice {
+        id: "USB-A".to_string(),
+        label: "USB-A".to_string(),
+        status: "online".to_string(),
+        detail: "USB-A Connected".to_string(),
+    }];
+    let mut controller =
+        ArkLogController::new(switching_devices_fixture_path().to_string_lossy(), devices)
+            .expect("controller");
+    controller.start_stream().expect("start A");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while controller.state().raw_count() < 50 && Instant::now() < deadline {
+        controller.pump_log_batches().expect("pump initial A batch");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(controller.state().raw_count(), 50);
+
+    controller
+        .request_device_refresh()
+        .expect("discover replacement device");
+    while (controller.connection_state() == &ConnectionState::Refreshing
+        || controller.stream_state() == &arklog::StreamState::Stopping
+        || controller.state().raw_count() == 0)
+        && Instant::now() < deadline
+    {
+        controller
+            .pump_log_batches()
+            .expect("drain bounded channel");
+        controller
+            .pump_background_tasks()
+            .expect("finish device switch cleanup");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    controller.pump_log_batches().expect("drain late batches");
+
+    assert_eq!(controller.selected_device().expect("device").id, "USB-B");
+    assert_eq!(controller.desired_stream(), arklog::DesiredStream::Running);
+    assert_eq!(controller.stream_state(), &arklog::StreamState::Streaming);
+    assert!(controller
+        .state_mut()
+        .visible_window(100)
+        .expect("new device output")
+        .iter()
+        .any(|line| line == "new-device"));
+    assert!(!controller
+        .state_mut()
+        .visible_window(100)
+        .expect("visible output")
+        .iter()
+        .any(|line| line == "old-tail-after-switch"));
+}
+
+#[test]
 fn unexpected_hdc_exit_replaces_the_false_live_state_and_keeps_final_logs() {
     let devices = vec![DeviceLogDevice {
         id: "EXIT-01".to_string(),
@@ -388,6 +527,93 @@ fn unexpected_hdc_exit_replaces_the_false_live_state_and_keeps_final_logs() {
         .expect("visible output")
         .iter()
         .any(|line| line == "last-before-exit"));
+}
+
+#[test]
+fn quiet_but_healthy_stream_is_not_reconnected() {
+    let devices = vec![DeviceLogDevice {
+        id: "USB-01".to_string(),
+        label: "USB-01".to_string(),
+        status: "online".to_string(),
+        detail: "USB-01 Connected".to_string(),
+    }];
+    let mut controller = ArkLogController::new(device_fixture_path().to_string_lossy(), devices)
+        .expect("controller");
+    controller.start_stream().expect("start quiet stream");
+    let stream_id = controller
+        .active_stream_id()
+        .expect("stream id")
+        .to_string();
+    let deadline = Instant::now() + Duration::from_millis(1_200);
+
+    while Instant::now() < deadline {
+        controller.pump_log_batches().expect("pump initial output");
+        controller
+            .pump_background_tasks()
+            .expect("health check uses process state, not log silence");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert_eq!(controller.active_stream_id(), Some(stream_id.as_str()));
+    assert_eq!(controller.stream_state(), &arklog::StreamState::Streaming);
+    controller.stop_stream().expect("cleanup stream");
+}
+
+#[test]
+fn late_old_reap_result_cannot_clear_the_replacement_stream() {
+    let devices = vec![DeviceLogDevice {
+        id: "USB-EXIT".to_string(),
+        label: "USB-EXIT".to_string(),
+        status: "online".to_string(),
+        detail: "USB-EXIT Connected".to_string(),
+    }];
+    let mut controller =
+        ArkLogController::new(switching_devices_fixture_path().to_string_lossy(), devices)
+            .expect("controller");
+    controller.start_stream().expect("start exiting stream");
+    let retiring_stream = controller
+        .active_stream_id()
+        .expect("retiring stream id")
+        .to_string();
+    let deadline = Instant::now() + Duration::from_secs(3);
+
+    while controller.stream_state() == &arklog::StreamState::Streaming && Instant::now() < deadline
+    {
+        controller
+            .pump_background_tasks()
+            .expect("observe unexpected exit");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    controller
+        .request_device_refresh()
+        .expect("discover replacement while old stream reaps");
+    while (controller.active_stream_id().is_none()
+        || controller.active_stream_id() == Some(retiring_stream.as_str())
+        || controller.state().raw_count() == 0)
+        && Instant::now() < deadline
+    {
+        controller
+            .pump_log_batches_limited(8)
+            .expect("drain retiring stream");
+        controller
+            .pump_background_tasks()
+            .expect("finish reap and start replacement");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    assert_eq!(controller.selected_device().expect("device").id, "USB-B");
+    assert_ne!(
+        controller.active_stream_id(),
+        Some(retiring_stream.as_str())
+    );
+    assert_eq!(controller.stream_state(), &arklog::StreamState::Streaming);
+    assert!(controller
+        .state_mut()
+        .visible_window(10)
+        .expect("replacement output")
+        .iter()
+        .any(|line| line == "new-device"));
+    controller.stop_stream().expect("cleanup replacement");
 }
 
 #[test]
@@ -443,4 +669,12 @@ fn delayed_fixture_path() -> PathBuf {
 
 fn replaced_devices_fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/replaced-devices-hdc.sh")
+}
+
+fn multiple_devices_fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/multiple-devices-hdc.sh")
+}
+
+fn switching_devices_fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/switching-devices-hdc.sh")
 }

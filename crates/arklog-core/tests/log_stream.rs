@@ -25,6 +25,27 @@ fn flushes_the_final_partial_log_batch_without_loss() {
 }
 
 #[test]
+fn flushes_a_continuous_partial_batch_within_the_batching_budget() {
+    let sink = Arc::new(WaitingSink::default());
+    let started = Instant::now();
+    let worker = spawn_log_reader(
+        "stream-paced".to_string(),
+        "USB-01".to_string(),
+        PacedReader::new(10, Duration::from_millis(30)),
+        sink.clone(),
+    );
+
+    let first_batch = sink.wait_for_first_batch(Duration::from_millis(230));
+
+    assert!(
+        started.elapsed() < Duration::from_millis(230),
+        "the first batch waited for the continuously arriving input to end"
+    );
+    assert!(first_batch.lines.len() < 10);
+    worker.join().expect("reader worker");
+}
+
+#[test]
 fn preserves_order_across_a_large_burst_and_its_partial_tail() {
     let sink = Arc::new(RecordingSink::default());
     let expected = (0..10_037)
@@ -93,6 +114,67 @@ impl LogBatchSink for RecordingSink {
 struct CountingReader {
     cursor: Cursor<Vec<u8>>,
     bytes_read: Arc<AtomicUsize>,
+}
+
+struct PacedReader {
+    remaining: usize,
+    next_index: usize,
+    interval: Duration,
+}
+
+impl PacedReader {
+    fn new(lines: usize, interval: Duration) -> Self {
+        Self {
+            remaining: lines,
+            next_index: 0,
+            interval,
+        }
+    }
+}
+
+impl Read for PacedReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.remaining == 0 {
+            return Ok(0);
+        }
+        std::thread::sleep(self.interval);
+        let line = format!("paced-{}\n", self.next_index);
+        let bytes = line.as_bytes();
+        assert!(buffer.len() >= bytes.len());
+        buffer[..bytes.len()].copy_from_slice(bytes);
+        self.remaining -= 1;
+        self.next_index += 1;
+        Ok(bytes.len())
+    }
+}
+
+#[derive(Default)]
+struct WaitingSink {
+    batches: (Mutex<Vec<DeviceLogOutputBatch>>, Condvar),
+}
+
+impl WaitingSink {
+    fn wait_for_first_batch(&self, timeout: Duration) -> DeviceLogOutputBatch {
+        let (batches, ready) = &self.batches;
+        let deadline = Instant::now() + timeout;
+        let mut guard = batches.lock().expect("batches");
+        while guard.is_empty() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(!remaining.is_zero(), "timed out waiting for first batch");
+            let (next, result) = ready.wait_timeout(guard, remaining).expect("wait batch");
+            guard = next;
+            assert!(!result.timed_out(), "timed out waiting for first batch");
+        }
+        guard[0].clone()
+    }
+}
+
+impl LogBatchSink for WaitingSink {
+    fn deliver(&self, batch: DeviceLogOutputBatch) {
+        let (batches, ready) = &self.batches;
+        batches.lock().expect("batches").push(batch);
+        ready.notify_all();
+    }
 }
 
 impl Read for CountingReader {

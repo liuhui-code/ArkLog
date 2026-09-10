@@ -41,6 +41,29 @@ fn reindexes_changed_regex_and_indexes_later_lines_incrementally() {
 }
 
 #[test]
+fn active_regex_append_does_not_rescan_historical_records() {
+    let mut store = SessionLogStore::new().expect("session store");
+    store
+        .append_lines((0..1_000).map(|index| format!("history {index}")))
+        .expect("history");
+    store.set_filter("^live").expect("filter");
+    store
+        .set_filter("^live")
+        .expect("unchanged filter resets work");
+
+    store
+        .append_lines(["drop new", "live new"])
+        .expect("incremental append");
+
+    assert_eq!(store.last_rebuild_work().raw_records_scanned, 0);
+    assert_eq!(store.visible_count(), 1);
+    assert_eq!(
+        store.visible_window(0, 10).expect("visible lines"),
+        ["live new"]
+    );
+}
+
+#[test]
 fn regex_filter_matches_existing_and_later_lines_without_case_sensitivity() {
     let mut store = SessionLogStore::new().expect("session store");
     store

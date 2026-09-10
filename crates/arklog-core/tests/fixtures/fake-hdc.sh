@@ -12,6 +12,14 @@ if [ "$2" = "EXIT-BURST" ]; then
   done
   exit 7
 fi
+if [ "$2" = "FULL-STOP" ]; then
+  index=1
+  while [ "$index" -le 1000 ]; do
+    printf 'full-stop-%s\n' "$index"
+    index=$((index + 1))
+  done
+  exec sleep 30
+fi
 if [ "$2" = "TAIL-01" ]; then
   index=1
   while [ "$index" -le 49 ]; do

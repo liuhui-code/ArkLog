@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crate::StreamState;
 
 use super::ArkLogController;
@@ -51,6 +53,7 @@ impl ArkLogController {
                     message: exit_message(exit.code),
                     active: true,
                 };
+                self.next_device_refresh_at = Some(Instant::now());
                 Ok(true)
             }
             Err(error) if !self.runtime.has_stream(&stream_id) => {
@@ -59,6 +62,7 @@ impl ArkLogController {
                     message: error,
                     active: false,
                 };
+                self.next_device_refresh_at = Some(Instant::now());
                 Ok(true)
             }
             Err(error) => Err(error),

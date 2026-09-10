@@ -1,7 +1,7 @@
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use arklog_core::{
     DeviceFaultLogFetchResult, DeviceFaultLogRawEntry, DeviceFaultLogStatus, DeviceLogDevice,
@@ -9,7 +9,9 @@ use arklog_core::{
 };
 
 use crate::background_job::BackgroundJob;
-use crate::{ArkLogState, ConnectionState, FaultLogState, StreamState};
+use crate::{
+    ArkLogState, ConnectionState, DesiredStream, FaultLogState, StreamAction, StreamState,
+};
 
 mod background;
 mod stream_health;
@@ -17,6 +19,15 @@ mod stream_sink;
 use stream_sink::ChannelLogSink;
 
 const LOG_CHANNEL_BATCHES: usize = 8;
+const NO_DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const STREAMING_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+const STREAM_START_RETRY_DELAYS: [Duration; 5] = [
+    Duration::from_millis(500),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+    Duration::from_secs(5),
+];
 
 pub struct ArkLogController {
     state: ArkLogState,
@@ -31,12 +42,18 @@ pub struct ArkLogController {
     fault_result: Option<DeviceFaultLogFetchResult>,
     selected_fault: usize,
     connection_state: ConnectionState,
+    desired_stream: DesiredStream,
     stream_state: StreamState,
     device_refresh: BackgroundJob<Vec<DeviceLogDevice>>,
+    next_device_refresh_at: Option<Instant>,
+    start_retry_device: Option<String>,
+    consecutive_start_failures: usize,
+    start_retry_at: Option<Instant>,
     fault_state: FaultLogState,
     fault_refresh: BackgroundJob<DeviceFaultLogFetchResult>,
     fault_refresh_device_id: Option<String>,
     stream_stop: BackgroundJob<()>,
+    stopping_stream: Option<String>,
     stream_reap: BackgroundJob<DeviceLogStreamExit>,
 }
 
@@ -70,15 +87,17 @@ impl ArkLogController {
     ) -> Result<Self, String> {
         let executable = executable.into();
         let (batch_sender, batch_receiver) = mpsc::sync_channel(LOG_CHANNEL_BATCHES);
-        let connection_state = if devices.is_empty() {
-            ConnectionState::NoDevices
-        } else {
-            ConnectionState::Ready
-        };
-        let selected_device = devices
+        let online_devices = devices
             .iter()
-            .position(|device| device.status == "online")
-            .unwrap_or(0);
+            .enumerate()
+            .filter(|(_, device)| device.status == "online")
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let (connection_state, selected_device) = match online_devices.as_slice() {
+            [] => (ConnectionState::NoDevices, 0),
+            [index] => (ConnectionState::Ready, *index),
+            _ => (ConnectionState::SelectionRequired, devices.len()),
+        };
         Ok(Self {
             state: ArkLogState::new().map_err(|error| error.to_string())?,
             executable: executable.clone(),
@@ -92,12 +111,18 @@ impl ArkLogController {
             fault_result: None,
             selected_fault: 0,
             connection_state,
+            desired_stream: DesiredStream::Stopped,
             stream_state: StreamState::Stopped,
             device_refresh: BackgroundJob::new(),
+            next_device_refresh_at: None,
+            start_retry_device: None,
+            consecutive_start_failures: 0,
+            start_retry_at: None,
             fault_state: FaultLogState::Idle,
             fault_refresh: BackgroundJob::new(),
             fault_refresh_device_id: None,
             stream_stop: BackgroundJob::new(),
+            stopping_stream: None,
             stream_reap: BackgroundJob::new(),
         })
     }
@@ -130,6 +155,71 @@ impl ArkLogController {
         &self.stream_state
     }
 
+    pub fn desired_stream(&self) -> DesiredStream {
+        self.desired_stream
+    }
+
+    pub fn request_stream_running(&mut self) {
+        self.desired_stream = DesiredStream::Running;
+        if !self.devices.iter().any(|device| device.status == "online")
+            && !self.device_refresh.is_running()
+            && self.next_device_refresh_at.is_none()
+        {
+            self.next_device_refresh_at = Some(Instant::now() + NO_DEVICE_REFRESH_INTERVAL);
+        }
+    }
+
+    pub fn request_stream_stopped(&mut self) {
+        self.desired_stream = DesiredStream::Stopped;
+        self.next_device_refresh_at = None;
+        self.clear_start_retry();
+    }
+
+    pub fn toggle_stream(&mut self) -> Result<bool, String> {
+        match self.desired_stream {
+            DesiredStream::Running => self.request_stream_stopped(),
+            DesiredStream::Stopped => self.request_stream_running(),
+        }
+        self.reconcile_stream()
+    }
+
+    pub fn pending_stream_action(&self) -> Option<StreamAction> {
+        pending_stream_action(self.desired_stream, &self.stream_state)
+    }
+
+    pub fn reconcile_stream(&mut self) -> Result<bool, String> {
+        if self.desired_stream == DesiredStream::Stopped {
+            if self.active_stream.is_some()
+                && !self.stream_stop.is_running()
+                && !self.stream_reap.is_running()
+            {
+                self.request_stream_cleanup(true)?;
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+        if matches!(self.stream_state, StreamState::Error { active: true, .. })
+            && !self.stream_stop.is_running()
+            && !self.stream_reap.is_running()
+        {
+            self.request_stream_cleanup(false)?;
+            return Ok(true);
+        }
+        if self.connection_state != ConnectionState::Ready
+            || self.active_stream.is_some()
+            || self.device_refresh.is_running()
+            || self.stream_stop.is_running()
+            || self.stream_reap.is_running()
+            || self
+                .start_retry_at
+                .is_some_and(|retry_at| Instant::now() < retry_at)
+        {
+            return Ok(false);
+        }
+        self.start_stream_now()?;
+        Ok(true)
+    }
+
     pub fn fault_state(&self) -> &FaultLogState {
         &self.fault_state
     }
@@ -147,6 +237,11 @@ impl ArkLogController {
     }
 
     pub fn start_stream(&mut self) -> Result<(), String> {
+        self.desired_stream = DesiredStream::Running;
+        self.start_stream_now()
+    }
+
+    fn start_stream_now(&mut self) -> Result<(), String> {
         if self.is_streaming() {
             return Ok(());
         }
@@ -175,6 +270,7 @@ impl ArkLogController {
         let stream = match self.runtime.start_stream(&device_id, sink) {
             Ok(stream) => stream,
             Err(error) => {
+                self.record_start_failure(&device_id);
                 self.stream_state = StreamState::Error {
                     message: error.clone(),
                     active: false,
@@ -182,12 +278,18 @@ impl ArkLogController {
                 return Err(error);
             }
         };
+        self.clear_start_retry();
         self.active_stream = Some(stream.stream_id);
         self.stream_state = StreamState::Streaming;
         Ok(())
     }
 
     pub fn stop_stream(&mut self) -> Result<(), String> {
+        self.desired_stream = DesiredStream::Stopped;
+        self.stop_stream_now(true)
+    }
+
+    fn stop_stream_now(&mut self, preserve_tail: bool) -> Result<(), String> {
         if self.stream_stop.is_running() {
             return Err("Stream stop is already running".to_string());
         }
@@ -201,6 +303,9 @@ impl ArkLogController {
             return Ok(());
         };
         self.stream_state = StreamState::Stopping;
+        if !preserve_tail {
+            self.active_stream = None;
+        }
         let runtime = Arc::clone(&self.runtime);
         let stopping_id = stream_id.clone();
         let (done_sender, done_receiver) = mpsc::sync_channel(1);
@@ -222,7 +327,15 @@ impl ArkLogController {
     }
 
     pub fn request_stop_stream(&mut self) -> Result<(), String> {
+        self.desired_stream = DesiredStream::Stopped;
+        self.request_stream_cleanup(true)
+    }
+
+    fn request_stream_cleanup(&mut self, preserve_tail: bool) -> Result<(), String> {
         if self.stream_stop.is_running() || self.stream_reap.is_running() {
+            if !preserve_tail {
+                self.active_stream = None;
+            }
             return Ok(());
         }
         let Some(stream_id) = self.active_stream.clone() else {
@@ -230,8 +343,12 @@ impl ArkLogController {
             return Ok(());
         };
         let runtime = Arc::clone(&self.runtime);
+        self.stopping_stream = Some(stream_id.clone());
         self.stream_stop
             .start(move || runtime.stop_stream(&stream_id))?;
+        if !preserve_tail {
+            self.active_stream = None;
+        }
         self.stream_state = StreamState::Stopping;
         Ok(())
     }
@@ -278,8 +395,32 @@ impl ArkLogController {
         let executable = self.executable.clone();
         self.device_refresh
             .start(move || HdcClient::new(executable).list_devices())?;
+        self.next_device_refresh_at = None;
         self.connection_state = ConnectionState::Refreshing;
         Ok(())
+    }
+
+    fn schedule_next_device_refresh(&mut self) {
+        if self.desired_stream != DesiredStream::Running || self.device_refresh.is_running() {
+            return;
+        }
+        let interval = device_refresh_interval(&self.stream_state);
+        self.next_device_refresh_at = Some(Instant::now() + interval);
+    }
+
+    fn request_scheduled_device_refresh(&mut self) -> Result<bool, String> {
+        if self.desired_stream != DesiredStream::Running || self.device_refresh.is_running() {
+            return Ok(false);
+        }
+        let Some(deadline) = self.next_device_refresh_at else {
+            self.schedule_next_device_refresh();
+            return Ok(false);
+        };
+        if Instant::now() < deadline {
+            return Ok(false);
+        }
+        self.request_device_refresh()?;
+        Ok(true)
     }
 
     fn apply_discovered_devices(
@@ -295,24 +436,69 @@ impl ArkLogController {
         });
         if self.is_streaming() && !selected_is_online {
             if stop_in_background {
-                self.request_stop_stream()?;
+                self.request_stream_cleanup(false)?;
             } else {
-                self.stop_stream()?;
+                self.stop_stream_now(false)?;
             }
         }
-        self.selected_device = selected_id
-            .and_then(|id| devices.iter().position(|device| device.id == id))
-            .or_else(|| devices.iter().position(|device| device.status == "online"))
-            .unwrap_or(0);
-        self.devices = devices;
-        self.fault_result = None;
-        self.selected_fault = 0;
-        self.connection_state = if self.devices.is_empty() {
-            ConnectionState::NoDevices
+        let online_devices = devices
+            .iter()
+            .enumerate()
+            .filter(|(_, device)| device.status == "online")
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let next_selected_device = if selected_is_online {
+            selected_id
+                .as_deref()
+                .and_then(|id| devices.iter().position(|device| device.id == id))
+        } else if online_devices.len() == 1 {
+            online_devices.first().copied()
         } else {
+            selected_id
+                .as_deref()
+                .and_then(|id| devices.iter().position(|device| device.id == id))
+        }
+        .unwrap_or(devices.len());
+        let target_changed = selected_id.as_deref()
+            != devices
+                .get(next_selected_device)
+                .map(|device| device.id.as_str());
+        self.selected_device = next_selected_device;
+        self.devices = devices;
+        if target_changed {
+            self.clear_start_retry();
+            self.fault_result = None;
+            self.selected_fault = 0;
+            self.fault_state = FaultLogState::Idle;
+        }
+        self.connection_state = if online_devices.is_empty() {
+            ConnectionState::NoDevices
+        } else if self
+            .selected_device()
+            .is_some_and(|device| device.status == "online")
+        {
             ConnectionState::Ready
+        } else {
+            ConnectionState::SelectionRequired
         };
         Ok(())
+    }
+
+    fn record_start_failure(&mut self, device_id: &str) {
+        if self.start_retry_device.as_deref() == Some(device_id) {
+            self.consecutive_start_failures = self.consecutive_start_failures.saturating_add(1);
+        } else {
+            self.start_retry_device = Some(device_id.to_string());
+            self.consecutive_start_failures = 1;
+        }
+        self.start_retry_at =
+            Some(Instant::now() + stream_start_retry_delay(self.consecutive_start_failures));
+    }
+
+    fn clear_start_retry(&mut self) {
+        self.start_retry_device = None;
+        self.consecutive_start_failures = 0;
+        self.start_retry_at = None;
     }
 
     pub fn next_device(&mut self) -> Result<(), String> {
@@ -425,6 +611,16 @@ impl ArkLogController {
             return Err("Stop HiLog before changing devices".to_string());
         }
         self.selected_device = index;
+        self.connection_state = if self
+            .selected_device()
+            .is_some_and(|device| device.status == "online")
+        {
+            ConnectionState::Ready
+        } else if self.devices.iter().any(|device| device.status == "online") {
+            ConnectionState::SelectionRequired
+        } else {
+            ConnectionState::NoDevices
+        };
         self.state.clear().map_err(|error| error.to_string())?;
         self.fault_result = None;
         self.selected_fault = 0;
@@ -438,7 +634,9 @@ impl ArkLogController {
         result: Result<(), String>,
     ) -> Result<(), String> {
         let active = !stream_id.is_empty() && self.runtime.has_stream(stream_id);
-        if !active {
+        if active && self.active_stream.is_none() {
+            self.active_stream = Some(stream_id.to_string());
+        } else if !active && self.active_stream.as_deref() == Some(stream_id) {
             self.active_stream = None;
         }
         match result {
@@ -454,5 +652,84 @@ impl ArkLogController {
                 Err(error)
             }
         }
+    }
+}
+
+fn stream_start_retry_delay(consecutive_failures: usize) -> Duration {
+    let delay_index = consecutive_failures
+        .saturating_sub(1)
+        .min(STREAM_START_RETRY_DELAYS.len() - 1);
+    STREAM_START_RETRY_DELAYS[delay_index]
+}
+
+fn device_refresh_interval(stream_state: &StreamState) -> Duration {
+    if stream_state == &StreamState::Streaming {
+        STREAMING_REFRESH_INTERVAL
+    } else {
+        NO_DEVICE_REFRESH_INTERVAL
+    }
+}
+
+fn pending_stream_action(
+    desired_stream: DesiredStream,
+    stream_state: &StreamState,
+) -> Option<StreamAction> {
+    match (desired_stream, stream_state) {
+        (
+            DesiredStream::Running,
+            StreamState::Stopped | StreamState::Stopping | StreamState::Error { active: false, .. },
+        ) => Some(StreamAction::Start),
+        (
+            DesiredStream::Stopped,
+            StreamState::Starting
+            | StreamState::Streaming
+            | StreamState::Error { active: true, .. },
+        ) => Some(StreamAction::Stop),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{device_refresh_interval, pending_stream_action, stream_start_retry_delay};
+    use crate::{DesiredStream, StreamAction, StreamState};
+    use std::time::Duration;
+
+    #[test]
+    fn stream_start_retry_policy_caps_at_five_seconds() {
+        let delays = (1..=7).map(stream_start_retry_delay).collect::<Vec<_>>();
+
+        assert_eq!(
+            delays,
+            [
+                Duration::from_millis(500),
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                Duration::from_secs(4),
+                Duration::from_secs(5),
+                Duration::from_secs(5),
+                Duration::from_secs(5),
+            ]
+        );
+    }
+
+    #[test]
+    fn discovery_policy_is_fast_while_waiting_and_slow_while_healthy() {
+        assert_eq!(
+            device_refresh_interval(&StreamState::Stopped),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            device_refresh_interval(&StreamState::Streaming),
+            Duration::from_secs(5)
+        );
+    }
+
+    #[test]
+    fn stop_requested_during_starting_remains_queued() {
+        assert_eq!(
+            pending_stream_action(DesiredStream::Stopped, &StreamState::Starting),
+            Some(StreamAction::Stop)
+        );
     }
 }

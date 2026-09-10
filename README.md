@@ -7,8 +7,8 @@ macOS Terminal/iTerm2，不再依赖浏览器窗口承载实时日志。
 ## 当前能力
 
 - 通过 `hdc list targets -v` 发现设备，使用 `Ctrl+D` 查看和刷新完整连接列表
-- 通过 `hdc -t <device> hilog` 启停实时 HiLog
-- 使用最多 50 行/100 ms 的批次和固定 8 批次通道传输，拥塞时背压而不丢行
+- 通过 `hdc -t <device> hilog` 启停 HiLog；Running/Stopped 意图由 Controller 持久保存，设备短暂离线或 HDC 故障不会取消自动恢复
+- 使用最多 50 行/首条后 100 ms 等待预算的批次和固定 8 批次通道传输，拥塞时背压而不丢行（100 ms 不是端到端硬 SLA）
 - 通过单一、不区分大小写的正则表达式过滤并高亮全部非空命中，正则源和编译内存都有硬上限
 - 使用 `Ctrl+F` 做不区分大小写的视图内字面量查找，支持循环定位和命中高亮
 - 滚动离开末尾后固定当前锚点，按 `Ctrl+G` 回到最新并恢复自动跟随
@@ -147,3 +147,13 @@ src/、src-tauri/、tests/     迁移期间保留的旧 React/Tauri 实现与回
 
 正式 Cargo workspace 只包含 `arklog-core` 和 `arklog-tui`。旧 Web/Tauri 代码不参与
 默认构建，可通过 `legacy:*` 脚本单独验证，待跨平台验收后删除。
+
+## 已知限制
+
+- 当前支持的 HDC/HiLog 命令面没有经过验证的服务端 `since`、cursor 或 attach
+  boundary。普通 `hilog` 可能先输出设备缓冲区中的既有记录；ArkLog 不用电脑本地时间
+  猜测边界，也不会默认执行会清除全设备日志缓存的 `hilog -r`。严格 LiveOnly 请求通过
+  `DeviceLogStartError::UnsupportedLiveStart` 明确失败，不会静默回退后声称“只看新日志”。
+- `SessionLogStore` 对固定正则和 Find 的新日志 append 是增量的；但用户调用
+  `set_filter` 或 `set_find` 更换查询时，历史索引仍在调用线程同步重建。该卡顿风险留作
+  独立后续问题，本轮没有引入 QueryWorker 或第二套存储服务。

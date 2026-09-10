@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use arklog::{
-    render_app, run_memory_probe, ActionStatus, AppCommand, AppView, ArkLogController,
+    app_layout, render_app, run_memory_probe, ActionStatus, AppCommand, AppView, ArkLogController,
     CommandContext, CommandKeymap, ExecutionLog, InputMode, LogTab, OverlayMode,
-    RuntimeDiagnostics, StreamIntent, TextInput, EXECUTION_LOG_MAX_BYTES, MEMORY_BUDGET_BYTES,
+    RuntimeDiagnostics, TextInput, EXECUTION_LOG_MAX_BYTES, MEMORY_BUDGET_BYTES,
 };
 use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
@@ -88,7 +88,6 @@ struct TerminalApp {
     should_quit: bool,
     viewport_height: usize,
     fault_scroll: usize,
-    stream_intent: StreamIntent,
     diagnostics: Option<RuntimeDiagnostics>,
 }
 
@@ -116,7 +115,7 @@ impl RedrawState {
 
 impl TerminalApp {
     fn new(
-        controller: ArkLogController,
+        mut controller: ArkLogController,
         action_error: Option<String>,
         execution_log: Option<ExecutionLog>,
     ) -> Self {
@@ -132,6 +131,7 @@ impl TerminalApp {
         if let (Some(diagnostics), Some(error)) = (&diagnostics, &action_error) {
             diagnostics.record_error("startup", error);
         }
+        controller.request_stream_running();
         Self {
             controller,
             input_mode: InputMode::Normal,
@@ -142,7 +142,6 @@ impl TerminalApp {
             should_quit: false,
             viewport_height: 1,
             fault_scroll: 0,
-            stream_intent: StreamIntent::auto_start(),
             diagnostics,
         }
     }
@@ -168,17 +167,9 @@ impl TerminalApp {
                 }
             }
             self.observe_runtime();
-            match self.stream_intent.reconcile(&mut self.controller) {
-                Ok(changed) => redraw.mark_if(changed),
-                Err(error) => {
-                    self.record_background_error(error);
-                    redraw.mark();
-                }
-            }
-            self.observe_runtime();
             if redraw.take() {
                 let size = terminal.size()?;
-                self.viewport_height = size.height.saturating_sub(10).max(1) as usize;
+                self.viewport_height = app_layout(size.into()).log_content_height;
                 let window_start = self
                     .controller
                     .state()
@@ -200,7 +191,7 @@ impl TerminalApp {
                             selected_device: self.controller.selected_device_index(),
                             tab: state.tab(),
                             stream_state: self.controller.stream_state(),
-                            pending_stream_action: self.stream_intent.pending_action(),
+                            pending_stream_action: self.controller.pending_stream_action(),
                             connection_status: self.controller.connection_state().message(),
                             fault_status: self.controller.fault_state().message(),
                             action_error: self.action_status.error(),
@@ -397,14 +388,10 @@ impl TerminalApp {
     }
 
     fn toggle_stream(&mut self) {
-        self.stream_intent.toggle(self.controller.stream_state());
+        let result = self.controller.toggle_stream().map(|_| ());
         if let Some(diagnostics) = &self.diagnostics {
-            diagnostics.record_stream_intent(self.stream_intent.pending_action());
+            diagnostics.record_stream_intent(self.controller.pending_stream_action());
         }
-        let result = self
-            .stream_intent
-            .reconcile(&mut self.controller)
-            .map(|_| ());
         self.record(result);
     }
 

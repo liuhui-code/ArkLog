@@ -1,7 +1,20 @@
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DesiredStream {
+    Running,
+    Stopped,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamAction {
+    Start,
+    Stop,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConnectionState {
     Refreshing,
     Ready,
+    SelectionRequired,
     NoDevices,
     Error(String),
 }
@@ -11,6 +24,7 @@ impl ConnectionState {
         match self {
             Self::Refreshing => "Refreshing devices",
             Self::Ready => "Devices ready",
+            Self::SelectionRequired => "Select an online device",
             Self::NoDevices => "No devices",
             Self::Error(message) => message,
         }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,6 +24,31 @@ pub struct DeviceLogStreamExit {
     pub success: bool,
     pub code: Option<i32>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceLogStartMode {
+    ExistingBuffer,
+    LiveOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeviceLogStartError {
+    UnsupportedLiveStart { reason: &'static str },
+    Launch(String),
+}
+
+impl fmt::Display for DeviceLogStartError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedLiveStart { reason } => {
+                write!(formatter, "UnsupportedLiveStart: {reason}")
+            }
+            Self::Launch(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for DeviceLogStartError {}
 
 pub struct DeviceLogRuntime {
     executable: String,
@@ -49,9 +75,26 @@ impl DeviceLogRuntime {
         device_id: &str,
         sink: Arc<dyn LogBatchSink>,
     ) -> Result<DeviceLogStreamSummary, String> {
+        self.start_stream_with_mode(device_id, DeviceLogStartMode::ExistingBuffer, sink)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn start_stream_with_mode(
+        &self,
+        device_id: &str,
+        mode: DeviceLogStartMode,
+        sink: Arc<dyn LogBatchSink>,
+    ) -> Result<DeviceLogStreamSummary, DeviceLogStartError> {
+        if mode == DeviceLogStartMode::LiveOnly {
+            return Err(DeviceLogStartError::UnsupportedLiveStart {
+                reason: "the supported HDC/HiLog command surface has no verified server-side cursor or attach boundary",
+            });
+        }
         let device_id = device_id.trim();
         if device_id.is_empty() {
-            return Err("A device id is required".to_string());
+            return Err(DeviceLogStartError::Launch(
+                "A device id is required".to_string(),
+            ));
         }
 
         let stream_id = format!(
@@ -66,16 +109,19 @@ impl DeviceLogRuntime {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|error| format!("Failed to start HDC HiLog: {error}"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "HDC HiLog stdout was unavailable".to_string())?;
+            .map_err(|error| {
+                DeviceLogStartError::Launch(format!("Failed to start HDC HiLog: {error}"))
+            })?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            DeviceLogStartError::Launch("HDC HiLog stdout was unavailable".to_string())
+        })?;
 
         let worker = spawn_log_reader(stream_id.clone(), device_id.to_string(), stdout, sink);
         self.streams
             .lock()
-            .map_err(|_| "Device log runtime lock was poisoned".to_string())?
+            .map_err(|_| {
+                DeviceLogStartError::Launch("Device log runtime lock was poisoned".to_string())
+            })?
             .insert(stream_id.clone(), ActiveStream { child, worker });
 
         Ok(DeviceLogStreamSummary {
