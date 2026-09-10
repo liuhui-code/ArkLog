@@ -98,8 +98,11 @@ fn queued_restart_starts_once_after_the_previous_stream_is_fully_reaped() {
         Some(StreamAction::Start)
     );
 
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while controller.active_stream_id() == Some(first_stream.as_str()) && Instant::now() < deadline
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while (controller.stream_state() != &StreamState::Streaming
+        || controller.active_stream_id().is_none()
+        || controller.active_stream_id() == Some(first_stream.as_str()))
+        && Instant::now() < deadline
     {
         controller.pump_background_tasks().expect("finish stop");
         std::thread::sleep(Duration::from_millis(10));

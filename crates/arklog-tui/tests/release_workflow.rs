@@ -2,11 +2,11 @@ use std::fs;
 use std::path::PathBuf;
 
 #[test]
-fn release_package_version_is_v0_2_4() {
-    assert_eq!(env!("CARGO_PKG_VERSION"), "0.2.4");
+fn release_package_version_is_v0_2_5() {
+    assert_eq!(env!("CARGO_PKG_VERSION"), "0.2.5");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let package = fs::read_to_string(root.join("package.json")).expect("root package metadata");
-    assert!(package.contains("\"version\": \"0.2.4\""));
+    assert!(package.contains("\"version\": \"0.2.5\""));
 }
 
 #[test]
