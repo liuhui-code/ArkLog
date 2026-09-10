@@ -17,10 +17,12 @@ and restart decisions.
    Device replacement and health cleanup stop an obsolete process without
    changing the desired value.
 3. While `Running` has no usable device, Controller schedules one discovery job
-   after approximately one second. A healthy stream is revalidated at the lower
-   frequency of approximately five seconds. Existing refresh jobs are reused.
-4. An unexpected HDC exit immediately makes discovery due. Quiet output from a
-   still-running HDC process is not treated as a disconnect signal.
+   after approximately one second. Once the stream process is healthy, automatic
+   device discovery is suspended so a second HDC command cannot interrupt or
+   time out the active HiLog session. Manual refresh remains available.
+4. The active HDC child process is the stream-health signal. An unexpected exit
+   immediately makes discovery due; quiet output from a still-running process is
+   not treated as a disconnect signal.
 5. Consecutive start failures for the same device use bounded delays of 500 ms,
    1 s, 2 s, 4 s, and 5 s; later failures stay capped at 5 s. A target change or
    successful start resets the retry state.

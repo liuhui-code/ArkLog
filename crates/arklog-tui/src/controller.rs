@@ -20,7 +20,6 @@ use stream_sink::ChannelLogSink;
 
 const LOG_CHANNEL_BATCHES: usize = 8;
 const NO_DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
-const STREAMING_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const STREAM_START_RETRY_DELAYS: [Duration; 5] = [
     Duration::from_millis(500),
     Duration::from_secs(1),
@@ -404,8 +403,8 @@ impl ArkLogController {
         if self.desired_stream != DesiredStream::Running || self.device_refresh.is_running() {
             return;
         }
-        let interval = device_refresh_interval(&self.stream_state);
-        self.next_device_refresh_at = Some(Instant::now() + interval);
+        self.next_device_refresh_at =
+            device_refresh_interval(&self.stream_state).map(|interval| Instant::now() + interval);
     }
 
     fn request_scheduled_device_refresh(&mut self) -> Result<bool, String> {
@@ -662,11 +661,11 @@ fn stream_start_retry_delay(consecutive_failures: usize) -> Duration {
     STREAM_START_RETRY_DELAYS[delay_index]
 }
 
-fn device_refresh_interval(stream_state: &StreamState) -> Duration {
+fn device_refresh_interval(stream_state: &StreamState) -> Option<Duration> {
     if stream_state == &StreamState::Streaming {
-        STREAMING_REFRESH_INTERVAL
+        None
     } else {
-        NO_DEVICE_REFRESH_INTERVAL
+        Some(NO_DEVICE_REFRESH_INTERVAL)
     }
 }
 
@@ -714,15 +713,12 @@ mod tests {
     }
 
     #[test]
-    fn discovery_policy_is_fast_while_waiting_and_slow_while_healthy() {
+    fn discovery_runs_while_waiting_but_not_during_a_healthy_stream() {
         assert_eq!(
             device_refresh_interval(&StreamState::Stopped),
-            Duration::from_secs(1)
+            Some(Duration::from_secs(1))
         );
-        assert_eq!(
-            device_refresh_interval(&StreamState::Streaming),
-            Duration::from_secs(5)
-        );
+        assert_eq!(device_refresh_interval(&StreamState::Streaming), None);
     }
 
     #[test]

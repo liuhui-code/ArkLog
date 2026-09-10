@@ -82,6 +82,18 @@ fn ignores_diagnostics_that_do_not_match_a_device_record() {
 }
 
 #[test]
+fn rejects_connected_diagnostics_and_does_not_repeat_device_fields_in_detail() {
+    let client = HdcClient::with_runner("hdc", ConnectedDiagnosticRunner);
+
+    let devices = client.list_devices().expect("devices");
+
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0].id, "USB-01");
+    assert_eq!(devices[0].status, "online");
+    assert_eq!(devices[0].detail, "USB Phone localhost hdc");
+}
+
+#[test]
 fn parses_official_verbose_target_fields_and_connection_states() {
     let client = HdcClient::with_runner("hdc", OfficialVerboseRunner);
 
@@ -107,6 +119,8 @@ struct FixtureRunner;
 struct OversizedRunner;
 
 struct DiagnosticRunner;
+
+struct ConnectedDiagnosticRunner;
 
 struct OfficialVerboseRunner;
 
@@ -138,6 +152,18 @@ impl CommandRunner for DiagnosticRunner {
         Ok(CommandOutput {
             success: true,
             stdout: b"daemon unavailable\n[Fail] discovery error\nUSB-01 Connected\n".to_vec(),
+            stderr: Vec::new(),
+        })
+    }
+}
+
+impl CommandRunner for ConnectedDiagnosticRunner {
+    fn output(&self, _program: &str, _args: &[String]) -> Result<CommandOutput, String> {
+        Ok(CommandOutput {
+            success: true,
+            stdout:
+                b"com daemon reported Connected to server\nUSB-01 USB Ready Phone localhost hdc\n"
+                    .to_vec(),
             stderr: Vec::new(),
         })
     }

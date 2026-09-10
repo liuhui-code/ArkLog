@@ -96,7 +96,6 @@ pub fn render_app(frame: &mut Frame, view: AppView<'_>) {
 }
 
 fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
-    let connection_is_ready = view.connection_status == "Devices ready";
     let editing_query = matches!(view.input_mode, InputMode::Filter | InputMode::Find);
     let narrow = area.width < theme::NARROW_CONTROLS_BREAKPOINT;
     let constraints = if editing_query {
@@ -131,19 +130,12 @@ fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
             Constraint::Fill(1),
             Constraint::Length(theme::NARROW_STREAM_STATUS_WIDTH),
         ]
-    } else if !connection_is_ready {
-        [
-            Constraint::Length(theme::STALE_DEVICE_WIDTH),
-            Constraint::Length(theme::LOG_TABS_WIDTH),
-            Constraint::Fill(1),
-            Constraint::Length(theme::COMPACT_STREAM_STATUS_WIDTH),
-        ]
     } else {
         [
-            Constraint::Length(theme::READY_DEVICE_WIDTH),
+            Constraint::Length(theme::CONNECTED_DEVICE_WIDTH),
             Constraint::Length(theme::LOG_TABS_WIDTH),
             Constraint::Fill(1),
-            Constraint::Length(theme::STREAM_STATUS_WIDTH),
+            Constraint::Length(theme::CONNECTED_STREAM_STATUS_WIDTH),
         ]
     };
     let [device, tabs, query, stream] = Layout::horizontal(constraints).areas(area);
@@ -153,25 +145,15 @@ fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
         None => "",
     };
     let device_line = match view.device_id {
-        Some(id) => {
-            let mut spans = vec![
-                Span::styled("● ", theme::connection_status(view.device_status)),
-                Span::styled(id, theme::emphasized_text()),
-                Span::raw(format!(
-                    "{}{}",
-                    theme::DEVICE_FIELD_GAP,
-                    view.device_status.to_ascii_uppercase()
-                )),
-            ];
-            if !connection_is_ready {
-                spans.push(Span::raw(format!(
-                    "{}{}",
-                    theme::STATUS_SEPARATOR,
-                    view.connection_status
-                )));
-            }
-            Line::from(spans)
-        }
+        Some(id) => Line::from(vec![
+            Span::styled("● ", theme::connection_status(view.device_status)),
+            Span::styled(id, theme::emphasized_text()),
+            Span::raw(format!(
+                "{}{}",
+                theme::DEVICE_FIELD_GAP,
+                view.device_status.to_ascii_uppercase()
+            )),
+        ]),
         None if view.connection_status == "No devices" => Line::styled(
             format!("No devices{pending_hint}"),
             theme::text(theme::Tone::Warning),

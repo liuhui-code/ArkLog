@@ -7,7 +7,7 @@ macOS Terminal/iTerm2，不再依赖浏览器窗口承载实时日志。
 ## 当前能力
 
 - 通过 `hdc list targets -v` 发现设备，使用 `Ctrl+D` 查看和刷新完整连接列表
-- 通过 `hdc -t <device> hilog` 启停 HiLog；Running/Stopped 意图由 Controller 持久保存，设备短暂离线或 HDC 故障不会取消自动恢复
+- 通过 `hdc -t <device> hilog` 启停 HiLog；Running/Stopped 意图由 Controller 持久保存，设备短暂离线或 HDC 故障不会取消自动恢复；健康流期间不并发轮询设备，避免安静日志流被探测超时打断
 - 使用最多 50 行/首条后 100 ms 等待预算的批次和固定 8 批次通道传输，拥塞时背压而不丢行（100 ms 不是端到端硬 SLA）
 - 通过单一、不区分大小写的正则表达式过滤并高亮全部非空命中，正则源和编译内存都有硬上限
 - 使用 `Ctrl+F` 做不区分大小写的视图内字面量查找，支持循环定位和命中高亮

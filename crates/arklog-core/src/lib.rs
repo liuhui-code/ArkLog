@@ -114,21 +114,42 @@ fn parse_hdc_targets(output: &str) -> Vec<DeviceLogDevice> {
     output
         .lines()
         .filter_map(|line| {
-            let detail = line.trim();
-            if detail.is_empty() || detail.contains("Connect server failed") {
+            let line = line.trim();
+            if line.is_empty() || line.contains("Connect server failed") {
                 return None;
             }
-            let mut parts = detail.split_whitespace();
-            let id = parts.next()?.to_string();
-            let status = parts.find_map(normalize_device_status)?;
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            let id = fields.first()?.to_string();
+            let (status, detail) = match fields.as_slice() {
+                [_, status, detail @ ..] => {
+                    normalize_device_status(status).map(|status| (status, detail.join(" ")))
+                }
+                _ => None,
+            }
+            .or_else(|| match fields.as_slice() {
+                [_, transport, status, detail @ ..] if is_hdc_transport(transport) => {
+                    normalize_device_status(status).map(|status| {
+                        let detail = std::iter::once(*transport)
+                            .chain(detail.iter().copied())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        (status, detail)
+                    })
+                }
+                _ => None,
+            })?;
             Some(DeviceLogDevice {
                 label: id.clone(),
                 id,
                 status: status.to_string(),
-                detail: detail.to_string(),
+                detail,
             })
         })
         .collect()
+}
+
+fn is_hdc_transport(value: &str) -> bool {
+    matches!(value.to_ascii_lowercase().as_str(), "usb" | "tcp")
 }
 
 fn normalize_device_status(value: &str) -> Option<&'static str> {
