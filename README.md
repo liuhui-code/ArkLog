@@ -109,6 +109,10 @@ ArkLog 使用 Catppuccin Mocha 语义色和标准 Unicode 圆角边框，不依�
 终端程序不能修改宿主字体，因此建议选择无连字的等宽字体，避免正则与原始日志字符
 被视觉合并：
 
+双击 Windows 发布版 `.exe` 时，ArkLog 会在已安装 Windows Terminal 的机器上自动转入
+新的 Windows Terminal 标签页，以使用其现代字体渲染；未安装 `wt.exe` 时继续使用当前
+控制台。从已有 PowerShell/CMD 会话启动时保持在该会话中。
+
 - Windows Terminal：`Cascadia Mono`，12–13 pt（Windows Terminal 默认自带）
 - macOS Terminal：`Menlo`，12–13 pt
 - iTerm2：`JetBrains Mono`，12–13 pt，并关闭 ligatures

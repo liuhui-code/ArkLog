@@ -17,10 +17,15 @@ mod system_clipboard;
 use system_clipboard::SystemClipboard;
 
 const MAX_LOG_BATCHES_PER_TICK: usize = 8;
+#[cfg(windows)]
+const WINDOWS_TERMINAL_CHILD_ARG: &str = "--windows-terminal-child";
 
 fn main() -> io::Result<()> {
     if env::args().nth(1).as_deref() == Some("--memory-probe") {
         return run_memory_budget_probe();
+    }
+    if relaunch_standalone_windows_console() {
+        return Ok(());
     }
     let executable = env::var("ARKLOG_HDC_PATH")
         .or_else(|_| env::var("ARKLOG_HDC"))
@@ -46,6 +51,55 @@ fn main() -> io::Result<()> {
         eprintln!("ArkLog execution log: {}", execution_log_path.display());
     }
     result
+}
+
+#[cfg(any(windows, test))]
+fn should_relaunch_in_windows_terminal(
+    is_windows: bool,
+    already_in_windows_terminal: bool,
+    console_process_count: u32,
+) -> bool {
+    is_windows && !already_in_windows_terminal && console_process_count == 1
+}
+
+#[cfg(windows)]
+fn relaunch_standalone_windows_console() -> bool {
+    let already_in_windows_terminal = env::var_os("WT_SESSION").is_some()
+        || env::args_os().any(|arg| arg == WINDOWS_TERMINAL_CHILD_ARG);
+    if !should_relaunch_in_windows_terminal(
+        true,
+        already_in_windows_terminal,
+        windows_console_process_count(),
+    ) {
+        return false;
+    }
+    let Ok(current_executable) = env::current_exe() else {
+        return false;
+    };
+    std::process::Command::new("wt.exe")
+        .arg("new-tab")
+        .arg(current_executable)
+        .arg(WINDOWS_TERMINAL_CHILD_ARG)
+        .args(env::args_os().skip(1))
+        .spawn()
+        .is_ok()
+}
+
+#[cfg(windows)]
+fn windows_console_process_count() -> u32 {
+    let mut process_ids = [0_u32; 2];
+    unsafe { GetConsoleProcessList(process_ids.as_mut_ptr(), process_ids.len() as u32) }
+}
+
+#[cfg(windows)]
+#[link(name = "Kernel32")]
+extern "system" {
+    fn GetConsoleProcessList(process_list: *mut u32, process_count: u32) -> u32;
+}
+
+#[cfg(not(windows))]
+fn relaunch_standalone_windows_console() -> bool {
+    false
 }
 
 fn run_memory_budget_probe() -> io::Result<()> {
@@ -466,7 +520,15 @@ impl TerminalApp {
 
 #[cfg(test)]
 mod tests {
-    use super::RedrawState;
+    use super::{should_relaunch_in_windows_terminal, RedrawState};
+
+    #[test]
+    fn only_a_standalone_legacy_windows_console_relaunches_in_windows_terminal() {
+        assert!(should_relaunch_in_windows_terminal(true, false, 1));
+        assert!(!should_relaunch_in_windows_terminal(true, true, 1));
+        assert!(!should_relaunch_in_windows_terminal(true, false, 2));
+        assert!(!should_relaunch_in_windows_terminal(false, false, 1));
+    }
 
     #[test]
     fn redraw_state_coalesces_changes_and_stays_clean_while_idle() {

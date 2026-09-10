@@ -12,6 +12,9 @@ ArkLog therefore:
 
 - uses only standard Unicode box-drawing and geometric characters;
 - does not require Nerd Font or Powerline glyphs;
+- relaunches a standalone Windows executable in Windows Terminal when available,
+  while preserving explicit PowerShell/CMD sessions and falling back when `wt.exe`
+  is unavailable;
 - documents no-ligature monospace font recommendations for exact log and regex reading;
 - never emits styling characters into stored or copied raw log text.
 
