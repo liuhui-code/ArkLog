@@ -20,6 +20,8 @@ use system_clipboard::SystemClipboard;
 const MAX_LOG_BATCHES_PER_TICK: usize = 8;
 #[cfg(windows)]
 const WINDOWS_TERMINAL_CHILD_ARG: &str = "--windows-terminal-child";
+#[cfg(windows)]
+const WINDOWS_TERMINAL_ARG: &str = "--windows-terminal";
 
 fn main() -> io::Result<()> {
     if env::args().nth(1).as_deref() == Some("--memory-probe") {
@@ -56,18 +58,21 @@ fn main() -> io::Result<()> {
 
 #[cfg(any(windows, test))]
 fn should_relaunch_in_windows_terminal(
+    explicitly_requested: bool,
     is_windows: bool,
     already_in_windows_terminal: bool,
     console_process_count: u32,
 ) -> bool {
-    is_windows && !already_in_windows_terminal && console_process_count == 1
+    explicitly_requested && is_windows && !already_in_windows_terminal && console_process_count == 1
 }
 
 #[cfg(windows)]
 fn relaunch_standalone_windows_console() -> bool {
+    let explicitly_requested = env::args_os().any(|arg| arg == WINDOWS_TERMINAL_ARG);
     let already_in_windows_terminal = env::var_os("WT_SESSION").is_some()
         || env::args_os().any(|arg| arg == WINDOWS_TERMINAL_CHILD_ARG);
     if !should_relaunch_in_windows_terminal(
+        explicitly_requested,
         true,
         already_in_windows_terminal,
         windows_console_process_count(),
@@ -81,7 +86,11 @@ fn relaunch_standalone_windows_console() -> bool {
         .arg("new-tab")
         .arg(current_executable)
         .arg(WINDOWS_TERMINAL_CHILD_ARG)
-        .args(env::args_os().skip(1))
+        .args(
+            env::args_os()
+                .skip(1)
+                .filter(|arg| arg != WINDOWS_TERMINAL_ARG),
+        )
         .spawn()
         .is_ok()
 }
@@ -574,11 +583,12 @@ mod tests {
     use super::{should_relaunch_in_windows_terminal, RedrawState};
 
     #[test]
-    fn only_a_standalone_legacy_windows_console_relaunches_in_windows_terminal() {
-        assert!(should_relaunch_in_windows_terminal(true, false, 1));
-        assert!(!should_relaunch_in_windows_terminal(true, true, 1));
-        assert!(!should_relaunch_in_windows_terminal(true, false, 2));
-        assert!(!should_relaunch_in_windows_terminal(false, false, 1));
+    fn windows_terminal_relaunch_requires_an_explicit_request() {
+        assert!(!should_relaunch_in_windows_terminal(false, true, false, 1));
+        assert!(should_relaunch_in_windows_terminal(true, true, false, 1));
+        assert!(!should_relaunch_in_windows_terminal(true, true, true, 1));
+        assert!(!should_relaunch_in_windows_terminal(true, true, false, 2));
+        assert!(!should_relaunch_in_windows_terminal(true, false, false, 1));
     }
 
     #[test]
