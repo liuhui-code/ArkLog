@@ -204,7 +204,10 @@ impl ArkLogController {
             self.request_stream_cleanup(false)?;
             return Ok(true);
         }
-        if self.connection_state != ConnectionState::Ready
+        let selected_device_is_online = self
+            .selected_device()
+            .is_some_and(|device| device.status == "online");
+        if !selected_device_is_online
             || self.active_stream.is_some()
             || self.device_refresh.is_running()
             || self.stream_stop.is_running()
@@ -278,6 +281,8 @@ impl ArkLogController {
             }
         };
         self.clear_start_retry();
+        self.next_device_refresh_at = None;
+        self.connection_state = ConnectionState::Ready;
         self.active_stream = Some(stream.stream_id);
         self.stream_state = StreamState::Streaming;
         Ok(())

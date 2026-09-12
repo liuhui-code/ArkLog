@@ -25,7 +25,10 @@ and restart decisions.
    not treated as a disconnect signal.
 5. Consecutive start failures for the same device use bounded delays of 500 ms,
    1 s, 2 s, 4 s, and 5 s; later failures stay capped at 5 s. A target change or
-   successful start resets the retry state.
+   successful start resets the retry state. A failed post-disconnect discovery
+   does not fence a previously selected device that is still cached as online:
+   Controller may retry that target after the old stream is reaped. A successful
+   replacement restores the ready connection state and cancels stale discovery.
 6. A replacement stream cannot start until the old stream has completed Stop or
    reap. Fast Stop→Start therefore creates exactly one replacement.
 7. The existing `stream_id` is the only batch fence. Manual Stop retains valid

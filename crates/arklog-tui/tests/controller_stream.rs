@@ -530,6 +530,70 @@ fn unexpected_hdc_exit_replaces_the_false_live_state_and_keeps_final_logs() {
 }
 
 #[test]
+fn cached_online_device_reconnects_when_post_disconnect_discovery_fails() {
+    let marker = std::env::temp_dir().join(format!(
+        "arklog-reconnect-after-discovery-error-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&marker);
+    let devices = vec![DeviceLogDevice {
+        id: "CACHED-ONLINE".to_string(),
+        label: "CACHED-ONLINE".to_string(),
+        status: "online".to_string(),
+        detail: "CACHED-ONLINE Connected".to_string(),
+    }];
+    let mut controller = ArkLogController::new(
+        reconnecting_after_discovery_error_fixture_path().to_string_lossy(),
+        devices,
+    )
+    .expect("controller");
+    controller
+        .start_stream()
+        .expect("start stream that exits once");
+    let first_stream = controller
+        .active_stream_id()
+        .expect("first stream id")
+        .to_string();
+    let deadline = Instant::now() + Duration::from_secs(3);
+
+    while (controller.active_stream_id().is_none()
+        || controller.active_stream_id() == Some(first_stream.as_str()))
+        && Instant::now() < deadline
+    {
+        controller
+            .pump_log_batches_limited(8)
+            .expect("drain stream output");
+        let _ = controller.pump_background_tasks();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert_eq!(
+        controller.selected_device().expect("cached device").status,
+        "online"
+    );
+    assert_eq!(controller.connection_state(), &ConnectionState::Ready);
+    assert_eq!(controller.stream_state(), &arklog::StreamState::Streaming);
+    assert_ne!(controller.active_stream_id(), Some(first_stream.as_str()));
+    let replacement_stream = controller
+        .active_stream_id()
+        .expect("replacement stream id")
+        .to_string();
+    let stability_deadline = Instant::now() + Duration::from_millis(1_200);
+    while Instant::now() < stability_deadline {
+        let _ = controller.pump_background_tasks();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(controller.connection_state(), &ConnectionState::Ready);
+    assert_eq!(
+        controller.active_stream_id(),
+        Some(replacement_stream.as_str()),
+        "a stale discovery timer must not disturb the replacement stream"
+    );
+    controller.stop_stream().expect("cleanup replacement");
+    let _ = std::fs::remove_file(marker);
+}
+
+#[test]
 fn quiet_but_healthy_stream_is_not_reconnected() {
     let devices = vec![DeviceLogDevice {
         id: "USB-01".to_string(),
@@ -677,4 +741,9 @@ fn multiple_devices_fixture_path() -> PathBuf {
 
 fn switching_devices_fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/switching-devices-hdc.sh")
+}
+
+fn reconnecting_after_discovery_error_fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/reconnecting-after-discovery-error-hdc.sh")
 }
