@@ -153,10 +153,16 @@ fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
         Some(StreamAction::Stop) => " · STOP QUEUED",
         None => "",
     };
-    let device_line = match view.device_id {
-        Some(id) => Line::from(vec![
+    let device_label = view.device_id.map(|id| {
+        view.devices
+            .iter()
+            .find(|device| device.id == id)
+            .map_or(id, |device| device.label.as_str())
+    });
+    let device_line = match device_label {
+        Some(label) => Line::from(vec![
             Span::styled("● ", theme::connection_status(view.device_status)),
-            Span::styled(id, theme::emphasized_text()),
+            Span::styled(label, theme::emphasized_text()),
             Span::raw(format!(
                 "{}{}",
                 theme::DEVICE_FIELD_GAP,
@@ -311,8 +317,8 @@ fn render_devices(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
                 Span::styled(
                     format!(
                         "{:<width$}",
-                        device.id,
-                        width = theme::DEVICE_ID_COLUMN_WIDTH
+                        device.label,
+                        width = theme::DEVICE_LABEL_COLUMN_WIDTH
                     ),
                     theme::emphasized_text(),
                 ),

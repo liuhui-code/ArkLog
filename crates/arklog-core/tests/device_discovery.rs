@@ -16,9 +16,21 @@ fn lists_structured_devices_from_hdc_targets() {
 
     assert_eq!(devices.len(), 2);
     assert_eq!(devices[0].id, "USB-01");
+    assert_eq!(devices[0].label, "USB-01");
     assert_eq!(devices[0].status, "online");
     assert_eq!(devices[1].id, "USB-02");
+    assert_eq!(devices[1].label, "USB-02");
     assert_eq!(devices[1].status, "offline");
+}
+
+#[test]
+fn prefixes_online_device_ids_with_the_special_cust_phone_code() {
+    let client = HdcClient::with_runner("hdc", PhoneCodeRunner);
+
+    let devices = client.list_devices().expect("devices");
+
+    assert_eq!(devices[0].id, "USB-01");
+    assert_eq!(devices[0].label, "TAS-AL00 USB-01");
 }
 
 #[test]
@@ -124,6 +136,8 @@ struct ConnectedDiagnosticRunner;
 
 struct OfficialVerboseRunner;
 
+struct PhoneCodeRunner;
+
 impl CommandRunner for FixtureRunner {
     fn output(&self, program: &str, args: &[String]) -> Result<CommandOutput, String> {
         if program != "hdc" || args != ["list", "targets", "-v"] {
@@ -174,6 +188,36 @@ impl CommandRunner for OfficialVerboseRunner {
         Ok(CommandOutput {
             success: true,
             stdout: b"USB-01 USB Ready Phone hdc-1\n192.0.2.1:8710 TCP Connected Tablet hdc-2\nUSB-03 USB Unauthorized Phone hdc-3\n".to_vec(),
+            stderr: Vec::new(),
+        })
+    }
+}
+
+impl CommandRunner for PhoneCodeRunner {
+    fn output(&self, program: &str, args: &[String]) -> Result<CommandOutput, String> {
+        if program != "hdc" {
+            return Err(format!("unexpected program: {program}"));
+        }
+        let stdout = match args {
+            [list, targets, verbose]
+                if [list.as_str(), targets.as_str(), verbose.as_str()]
+                    == ["list", "targets", "-v"] =>
+            {
+                b"USB-01 USB Ready Phone hdc-1\n".to_vec()
+            }
+            [target, id, shell, command]
+                if target == "-t"
+                    && id == "USB-01"
+                    && shell == "shell"
+                    && command == "ls -1 /version/special_cust" =>
+            {
+                b"TAS-AL00\n".to_vec()
+            }
+            _ => return Err(format!("unexpected command: {program} {}", args.join(" "))),
+        };
+        Ok(CommandOutput {
+            success: true,
+            stdout,
             stderr: Vec::new(),
         })
     }

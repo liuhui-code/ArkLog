@@ -189,13 +189,13 @@ fn renders_all_connected_devices_in_the_device_list_view() {
     let devices = vec![
         DeviceLogDevice {
             id: "USB-01".to_string(),
-            label: "Phone A".to_string(),
+            label: "TAS-AL00 USB-01".to_string(),
             status: "online".to_string(),
             detail: "USB-01 Connected product:alpha".to_string(),
         },
         DeviceLogDevice {
             id: "USB-02".to_string(),
-            label: "Phone B".to_string(),
+            label: "NOH-AN00 USB-02".to_string(),
             status: "offline".to_string(),
             detail: "USB-02 Offline product:beta".to_string(),
         },
@@ -259,9 +259,13 @@ fn renders_all_connected_devices_in_the_device_list_view() {
         .expect("connection marker");
     assert_eq!(connection_marker.fg, Color::Rgb(249, 226, 175));
     assert!(rendered.contains("CONNECTED DEVICES"));
-    assert!(rendered.contains("USB-01"));
+    assert!(rendered.contains("TAS-AL00 USB-01"));
     assert!(rendered.contains("product:alpha"));
-    assert!(rendered.contains("USB-02"));
+    assert_eq!(
+        rendered.matches("NOH-AN00").count(),
+        2,
+        "the selected phone code should lead both the compact header and full list label"
+    );
     assert!(rendered.contains("product:beta"));
     assert!(rendered.contains("Ctrl+R refresh"));
 }

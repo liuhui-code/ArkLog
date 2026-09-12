@@ -17,6 +17,12 @@ pub use runtime::{
 };
 pub use stream::{spawn_log_reader, DeviceLogOutputBatch, LogBatchSink};
 
+const PHONE_CODE_COMMAND: &str = "ls -1 /version/special_cust";
+const PHONE_CODE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(1);
+const PHONE_CODE_OUTPUT_LIMIT_BYTES: usize = 4 * 1024;
+const PHONE_CODE_MAX_CHARS: usize = 128;
+const DEVICE_LABEL_SEPARATOR: &str = " ";
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceLogDevice {
@@ -73,7 +79,7 @@ impl<R: CommandRunner> HdcClient<R> {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
-        let devices = parse_hdc_targets(&combined);
+        let mut devices = parse_hdc_targets(&combined);
         if !output.success && devices.is_empty() {
             let message = combined.trim();
             return Err(if message.is_empty() {
@@ -82,7 +88,31 @@ impl<R: CommandRunner> HdcClient<R> {
                 message.to_string()
             });
         }
+        for device in devices
+            .iter_mut()
+            .filter(|device| device.status == "online")
+        {
+            if let Some(phone_code) = self.phone_code(&device.id) {
+                device.label = format!("{phone_code}{DEVICE_LABEL_SEPARATOR}{}", device.id);
+            }
+        }
         Ok(devices)
+    }
+
+    fn phone_code(&self, device_id: &str) -> Option<String> {
+        let args = ["-t", device_id, "shell", PHONE_CODE_COMMAND].map(str::to_string);
+        let output = self
+            .runner
+            .output_with_policy(
+                &self.executable,
+                &args,
+                CommandPolicy::new(PHONE_CODE_LOOKUP_TIMEOUT, PHONE_CODE_OUTPUT_LIMIT_BYTES),
+            )
+            .ok()?;
+        output
+            .success
+            .then(|| parse_phone_code(&output.stdout))
+            .flatten()
     }
 
     pub fn list_fault_logs(&self, device_id: &str) -> Result<DeviceFaultLogFetchResult, String> {
@@ -160,6 +190,18 @@ fn normalize_device_status(value: &str) -> Option<&'static str> {
         "unknown" => Some("unknown"),
         _ => None,
     }
+}
+
+fn parse_phone_code(output: &[u8]) -> Option<String> {
+    let output = std::str::from_utf8(output).ok()?;
+    output.lines().find_map(|line| {
+        let candidate = line.trim();
+        (!candidate.is_empty()
+            && candidate.chars().count() <= PHONE_CODE_MAX_CHARS
+            && !candidate.chars().any(char::is_whitespace)
+            && !candidate.contains(['/', '\\']))
+        .then(|| candidate.to_string())
+    })
 }
 
 pub(crate) use command::{configure_hidden_command, terminate_process_tree};
