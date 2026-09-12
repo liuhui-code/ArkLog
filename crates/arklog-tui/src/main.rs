@@ -5,8 +5,9 @@ use std::time::Duration;
 
 use arklog::{
     app_layout, render_app, run_memory_probe, ActionStatus, AppCommand, AppView, ArkLogController,
-    CommandContext, CommandKeymap, ExecutionLog, InputMode, LogTab, OverlayMode,
-    RuntimeDiagnostics, TextInput, EXECUTION_LOG_MAX_BYTES, MEMORY_BUDGET_BYTES,
+    CommandContext, CommandKeymap, ExecutionLog, InputMode, LogTab, NavigationAction,
+    NavigationContext, NavigationKeymap, OverlayMode, RuntimeDiagnostics, TextInput,
+    EXECUTION_LOG_MAX_BYTES, MEMORY_BUDGET_BYTES,
 };
 use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
@@ -223,15 +224,15 @@ impl TerminalApp {
             self.observe_runtime();
             if redraw.take() {
                 let size = terminal.size()?;
-                self.viewport_height = app_layout(size.into()).log_content_height;
-                let window_start = self
-                    .controller
-                    .state()
-                    .visible_window_start(self.viewport_height);
-                let lines = self
-                    .controller
+                let geometry = app_layout(size.into());
+                self.viewport_height = geometry.log_content_height;
+                self.controller
                     .state_mut()
-                    .visible_window(self.viewport_height)?;
+                    .set_viewport_size(geometry.log_content_width, geometry.log_content_height);
+                let window = self.controller.state_mut().display_window()?;
+                let window_start = window.start_record;
+                let window_start_cell = window.start_cell;
+                let lines = window.records;
                 terminal.draw(|frame| {
                     let state = self.controller.state();
                     let device = self.controller.selected_device();
@@ -259,6 +260,9 @@ impl TerminalApp {
                             find_status: state.find_status(),
                             current_find_visible_index: state.current_find_visible_index(),
                             window_start,
+                            window_start_cell,
+                            horizontal_offset: state.horizontal_offset(),
+                            soft_wrap: state.soft_wrap(),
                             lines: &lines,
                             input_mode: self.input_mode,
                             overlay: self.overlay,
@@ -309,18 +313,25 @@ impl TerminalApp {
             self.handle_command(command);
             return;
         }
+        let navigation_context = if self.overlay == OverlayMode::Devices {
+            NavigationContext::Devices
+        } else {
+            match self.input_mode {
+                InputMode::Filter => NavigationContext::FilterInput,
+                InputMode::Find => NavigationContext::FindInput,
+                InputMode::Normal if self.controller.state().tab() == LogTab::HiLog => {
+                    NavigationContext::HiLog
+                }
+                InputMode::Normal => NavigationContext::FaultLog,
+            }
+        };
+        if let Some(action) = NavigationKeymap::resolve(key, navigation_context) {
+            self.handle_navigation(action);
+            return;
+        }
         if self.overlay == OverlayMode::Devices {
-            match key.code {
-                KeyCode::Esc => self.overlay = OverlayMode::None,
-                KeyCode::Left => {
-                    let result = self.controller.previous_device();
-                    self.record(result);
-                }
-                KeyCode::Right => {
-                    let result = self.controller.next_device();
-                    self.record(result);
-                }
-                _ => {}
+            if key.code == KeyCode::Esc {
+                self.overlay = OverlayMode::None;
             }
             return;
         }
@@ -331,14 +342,6 @@ impl TerminalApp {
         match key.code {
             KeyCode::Tab => self.controller.state_mut().next_tab(),
             KeyCode::End => self.controller.state_mut().follow_latest(),
-            KeyCode::Left => {
-                let result = self.controller.previous_device();
-                self.record(result);
-            }
-            KeyCode::Right => {
-                let result = self.controller.next_device();
-                self.record(result);
-            }
             KeyCode::Up => self.move_up(1),
             KeyCode::Down => self.move_down(1),
             KeyCode::PageUp if self.controller.state().tab() == LogTab::FaultLog => {
@@ -350,6 +353,42 @@ impl TerminalApp {
             KeyCode::PageUp => self.move_up(10),
             KeyCode::PageDown => self.move_down(10),
             _ => {}
+        }
+    }
+
+    fn handle_navigation(&mut self, action: NavigationAction) {
+        match action {
+            NavigationAction::ScrollLeft => self.controller.state_mut().scroll_horizontal_left(),
+            NavigationAction::ScrollRight => {
+                let result = self
+                    .controller
+                    .state_mut()
+                    .scroll_horizontal_right()
+                    .map_err(|error| error.to_string());
+                self.record(result);
+            }
+            NavigationAction::ResetHorizontal => self.controller.state_mut().reset_horizontal(),
+            NavigationAction::PreviousDevice => {
+                let result = self.controller.previous_device();
+                self.record(result);
+            }
+            NavigationAction::NextDevice => {
+                let result = self.controller.next_device();
+                self.record(result);
+            }
+            NavigationAction::OlderFilter => {
+                let current = self.input.text().to_string();
+                if let Some(query) = self.controller.state_mut().older_filter_query(&current) {
+                    self.input.replace_all(&query);
+                }
+            }
+            NavigationAction::NewerFilter => {
+                let current = self.input.text().to_string();
+                if let Some(query) = self.controller.state_mut().newer_filter_query(&current) {
+                    self.input.replace_all(&query);
+                }
+            }
+            NavigationAction::ToggleSoftWrap => self.controller.state_mut().toggle_soft_wrap(),
         }
     }
 
@@ -369,6 +408,9 @@ impl TerminalApp {
                 };
             }
             AppCommand::EditFilter if self.controller.state().tab() == LogTab::HiLog => {
+                self.controller
+                    .state_mut()
+                    .cancel_filter_history_navigation();
                 self.input_mode = InputMode::Filter;
                 self.input = TextInput::new(self.controller.state().filter_query());
             }
@@ -408,13 +450,16 @@ impl TerminalApp {
     fn handle_input_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => {
+                self.controller
+                    .state_mut()
+                    .cancel_filter_history_navigation();
                 self.input_mode = InputMode::Normal;
                 self.input = TextInput::new("");
             }
             KeyCode::Enter if self.input_mode == InputMode::Filter => {
-                self.controller
-                    .state_mut()
-                    .apply_filter(self.input.text().to_string());
+                let query = self.input.text().to_string();
+                let result = self.controller.state_mut().apply_filter(query);
+                self.record(result);
                 self.input_mode = InputMode::Normal;
                 self.input = TextInput::new("");
             }
@@ -466,9 +511,12 @@ impl TerminalApp {
             self.controller.previous_fault();
             self.fault_scroll = 0;
         } else {
-            self.controller
+            let result = self
+                .controller
                 .state_mut()
-                .scroll_up(rows, self.viewport_height);
+                .scroll_up(rows, self.viewport_height)
+                .map_err(|error| error.to_string());
+            self.record(result);
         }
     }
 
@@ -477,9 +525,12 @@ impl TerminalApp {
             self.controller.next_fault();
             self.fault_scroll = 0;
         } else {
-            self.controller
+            let result = self
+                .controller
                 .state_mut()
-                .scroll_down(rows, self.viewport_height);
+                .scroll_down(rows, self.viewport_height)
+                .map_err(|error| error.to_string());
+            self.record(result);
         }
     }
 

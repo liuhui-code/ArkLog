@@ -8,4 +8,5 @@ fn hilog_viewport_height_comes_from_the_same_compact_layout_as_rendering() {
     assert_eq!(layout.controls.height, 3);
     assert_eq!(layout.workspace.height, 21);
     assert_eq!(layout.log_content_height, 19);
+    assert_eq!(layout.log_content_width, 108);
 }

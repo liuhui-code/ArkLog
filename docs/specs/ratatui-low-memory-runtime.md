@@ -64,6 +64,22 @@ without bound.
 18. Stream presentation uses the confirmed lifecycle state. A stop request
     shows `STOPPING` until HDC termination and final-batch flushing complete;
     only the confirmed inactive state shows `STOPPED`.
+19. HiLog defaults to one source record per terminal row. Left/Right move a
+    cell-based horizontal viewport, `Home` returns to column zero, and only
+    real hidden content receives neutral overflow markers. Find computes the
+    selected record's source range on demand and reveals off-screen matches.
+20. `Ctrl+W` toggles grapheme-safe soft wrapping only in the HiLog body. One
+    source record may occupy multiple display rows but retains one identity and
+    count. Vertical scrolling, resize, Find, mode changes, and follow-latest use
+    one `(record, source-cell)` content anchor and materialize only visible rows.
+21. The process keeps the 50 most recent successfully applied non-empty regex
+    source strings. Exact duplicates move to newest. Filter-editor Up/Down
+    browse without applying and restore the draft past the newest item. Clear,
+    device replacement, and reconnect retain this input history; process exit
+    discards it. No query result or compiled Regex is retained per history item.
+22. UTF-8 byte ranges, grapheme boundaries, and terminal cell columns remain
+    distinct. Tabs expand only for display at a four-cell tab stop. Overflow
+    and continuation markers never enter matching, storage, or raw copying.
 
 ## Object boundaries
 
@@ -72,8 +88,9 @@ without bound.
 - `SessionLogStore` owns temporary raw/index files, regex validation,
   incremental indexing, bounded window reads, and clear-on-drop cleanup.
 - `ArkLogController` owns device selection, HDC jobs, stream truth, and bounded
-  batch delivery. `TerminalApp` owns tabs, input modes, scrolling, and redraw
-  scheduling.
+  batch delivery. `ArkLogState` owns the single viewport content anchor and
+  process-lifetime regex input history. `TerminalApp` owns input modes, event
+  dispatch, and redraw scheduling.
 - `ui` renders immutable view data with Ratatui and performs no HDC or file I/O.
 
 ## Memory budget
@@ -81,16 +98,20 @@ without bound.
 - HiLog delivery channel: at most 8 batches of 50 lines.
 - HDC reader-to-batcher queue: at most 256 complete lines; a slow consumer
   backpressures the reader instead of accumulating an unbounded burst.
-- Rendered HiLog window: terminal height plus at most 32 overscan lines.
+- Rendered HiLog window: only records and wrapped fragments needed for the
+  current terminal height; a single huge record never becomes thousands of
+  retained `Line`/`Span` values.
 - HDC discovery output: at most 256 KiB; Fault Log output: at most 4 MiB.
-- Regex source: at most 4 KiB; compiled regex budget: at most 1 MiB.
+- Regex source: at most 4 KiB; active filter compiled budget: at most 1 MiB;
+  active literal Find compiled budget: at most 512 KiB; input history: at most
+  50 uncompiled source strings.
 - Application RSS acceptance ceiling: 50 MiB in release mode.
 - Raw HiLog and line/match indexes: session temporary files, not heap buffers.
 
 ## Non-goals
 
 - retaining HiLog after ArkLog exits
-- SQLite, history queries, retention configuration, or background databases
+- SQLite, persisted log-history queries, retention configuration, or background databases
 - graphical window chrome, mouse-only interaction, or browser rendering
 - promising finite disk use for an intentionally unbounded no-loss session
 
@@ -105,7 +126,9 @@ without bound.
   pumping is bounded, stale device results are rejected, and displayed stream
   state follows the real child process.
 - TestBackend tests prove the shared tabs, status, filter/find, Fault Log, and
-  follow-latest states render through the public UI interface.
+  follow-latest states render through the public UI interface. Viewport tests
+  cover horizontal overflow, off-screen Find, Unicode/tab geometry, soft-wrap
+  scrolling and resize anchors, and bounded huge-record materialization.
 - Real-HDC boundaries remain covered with fake command fixtures.
 - macOS and Windows CI run the release stress scenario with 100,000 HiLog lines
   and a 2 MiB Fault Log payload, asserting RSS remains below 50 MiB.

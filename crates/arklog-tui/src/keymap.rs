@@ -23,6 +23,53 @@ pub enum CommandContext {
 
 pub struct CommandKeymap;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NavigationAction {
+    ScrollLeft,
+    ScrollRight,
+    ResetHorizontal,
+    PreviousDevice,
+    NextDevice,
+    OlderFilter,
+    NewerFilter,
+    ToggleSoftWrap,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NavigationContext {
+    HiLog,
+    FaultLog,
+    Devices,
+    FilterInput,
+    FindInput,
+}
+
+pub struct NavigationKeymap;
+
+impl NavigationKeymap {
+    pub fn resolve(key: KeyEvent, context: NavigationContext) -> Option<NavigationAction> {
+        if context == NavigationContext::HiLog
+            && key.modifiers == KeyModifiers::CONTROL
+            && matches!(key.code, KeyCode::Char('w' | 'W'))
+        {
+            return Some(NavigationAction::ToggleSoftWrap);
+        }
+        if !key.modifiers.is_empty() {
+            return None;
+        }
+        match (context, key.code) {
+            (NavigationContext::HiLog, KeyCode::Left) => Some(NavigationAction::ScrollLeft),
+            (NavigationContext::HiLog, KeyCode::Right) => Some(NavigationAction::ScrollRight),
+            (NavigationContext::HiLog, KeyCode::Home) => Some(NavigationAction::ResetHorizontal),
+            (NavigationContext::Devices, KeyCode::Left) => Some(NavigationAction::PreviousDevice),
+            (NavigationContext::Devices, KeyCode::Right) => Some(NavigationAction::NextDevice),
+            (NavigationContext::FilterInput, KeyCode::Up) => Some(NavigationAction::OlderFilter),
+            (NavigationContext::FilterInput, KeyCode::Down) => Some(NavigationAction::NewerFilter),
+            _ => None,
+        }
+    }
+}
+
 impl CommandKeymap {
     pub fn resolve(key: KeyEvent, context: CommandContext) -> Option<AppCommand> {
         if !key.modifiers.contains(KeyModifiers::CONTROL) {

@@ -7,7 +7,11 @@ use ratatui::{
 };
 use regex::Regex;
 
-use crate::{input_ui::render_text_input, theme, LogTab, StreamAction, StreamState, TextInputView};
+use crate::{
+    input_ui::render_text_input,
+    log_geometry::{horizontal_slice, literal_match_ranges_in, wrapped_slices, VisibleGrapheme},
+    theme, LogTab, StreamAction, StreamState, TextInputView,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputMode {
@@ -43,6 +47,9 @@ pub struct AppView<'a> {
     pub find_status: (u64, u64),
     pub current_find_visible_index: Option<u64>,
     pub window_start: u64,
+    pub window_start_cell: u64,
+    pub horizontal_offset: u64,
+    pub soft_wrap: bool,
     pub lines: &'a [String],
     pub input_mode: InputMode,
     pub overlay: OverlayMode,
@@ -57,6 +64,7 @@ pub struct AppLayoutGeometry {
     pub controls: Rect,
     pub workspace: Rect,
     pub log_content_height: usize,
+    pub log_content_width: usize,
 }
 
 pub fn app_layout(area: Rect) -> AppLayoutGeometry {
@@ -69,6 +77,7 @@ pub fn app_layout(area: Rect) -> AppLayoutGeometry {
         controls,
         workspace,
         log_content_height: theme::panel_content_height(workspace.height),
+        log_content_width: theme::panel_content_width(workspace.width),
     }
 }
 
@@ -219,7 +228,7 @@ fn render_query(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
     } else {
         match view.input_mode {
             InputMode::Filter => (
-                " REGEX FILTER · ENTER APPLY · Ctrl+A/C/X/V/Z ",
+                " REGEX FILTER · ENTER APPLY · ↑/↓ HISTORY · Ctrl+A/C/X/V/Z ",
                 view.input.text,
                 theme::Tone::Warning,
             ),
@@ -330,23 +339,49 @@ fn render_devices(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
 }
 
 fn render_hilog(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
-    let lines = view
-        .lines
-        .iter()
-        .enumerate()
-        .map(|(offset, raw)| {
-            let visible_index = view.window_start + offset as u64;
-            let current = view.current_find_visible_index == Some(visible_index);
-            styled_log_line(raw, view.active_filter, view.find_query, current)
-        })
-        .collect::<Vec<_>>();
+    let content_width = theme::panel_content_width(area.width);
+    let content_height = theme::panel_content_height(area.height);
+    let mut lines = Vec::with_capacity(content_height);
+    for (offset, raw) in view.lines.iter().enumerate() {
+        let visible_index = view.window_start + offset as u64;
+        let current = view.current_find_visible_index == Some(visible_index);
+        if view.soft_wrap {
+            let start_cell = if offset == 0 {
+                view.window_start_cell
+            } else {
+                0
+            };
+            lines.extend(styled_wrapped_log_lines(
+                raw,
+                view.active_filter,
+                view.find_query,
+                current,
+                start_cell,
+                content_width,
+                content_height.saturating_sub(lines.len()),
+            ));
+        } else {
+            lines.push(styled_log_line(
+                raw,
+                view.active_filter,
+                view.find_query,
+                current,
+                view.horizontal_offset,
+                content_width,
+            ));
+        }
+        if lines.len() == content_height {
+            break;
+        }
+    }
     let mode = if view.following_latest {
         "FOLLOWING LATEST"
     } else {
         "SCROLL PAUSED · Ctrl+G TO LATEST"
     };
+    let wrap = if view.soft_wrap { " · WRAP ON" } else { "" };
     let title = format!(
-        " {mode} · {} / {} VISIBLE · FIND {}/{} ",
+        " {mode}{wrap} · {} / {} VISIBLE · FIND {}/{} ",
         view.visible_count, view.raw_count, view.find_status.0, view.find_status.1
     );
     frame.render_widget(Paragraph::new(lines).block(theme::panel(title)), area);
@@ -411,52 +446,147 @@ fn styled_log_line(
     filter: Option<&Regex>,
     find_query: &str,
     current_find: bool,
+    horizontal_offset: u64,
+    content_width: usize,
 ) -> Line<'static> {
     let level = log_level_field(raw);
-    let filter_ranges = filter
-        .into_iter()
-        .flat_map(|filter| filter.find_iter(raw))
-        .filter(|found| !found.is_empty())
-        .map(|found| found.start()..found.end())
-        .collect::<Vec<_>>();
-    let find_ranges = literal_match_ranges(raw, find_query);
-    if filter_ranges.is_empty() && find_ranges.is_empty() && level.is_none() {
-        return Line::styled(
-            raw.to_string(),
-            theme::log_span(None, current_find, false, false),
-        );
-    }
-    let mut boundaries = vec![0, raw.len()];
-    if let Some((range, _)) = &level {
-        boundaries.extend([range.start, range.end]);
-    }
-    for range in filter_ranges.iter().chain(&find_ranges) {
-        boundaries.extend([range.start, range.end]);
-    }
-    boundaries.sort_unstable();
-    boundaries.dedup();
+    let visible = horizontal_slice(raw, horizontal_offset, content_width);
+    let visible_bytes = visible_byte_range(&visible.graphemes);
+    let filter_ranges = visible_bytes
+        .as_ref()
+        .map_or_else(Vec::new, |range| regex_match_ranges_in(raw, filter, range));
+    let find_ranges = visible_bytes.as_ref().map_or_else(Vec::new, |range| {
+        literal_match_ranges_in(raw, find_query, range)
+    });
     let mut spans = Vec::new();
-    for boundary in boundaries.windows(2) {
-        let start = boundary[0];
-        let end = boundary[1];
-        let span_level = level
-            .as_ref()
-            .filter(|(range, _)| range.contains(&start))
-            .map(|(_, level)| *level);
-        let style = theme::log_span(
-            span_level,
-            current_find,
-            find_ranges.iter().any(|range| range.contains(&start)),
-            filter_ranges.iter().any(|range| range.contains(&start)),
-        );
-        spans.push(Span::styled(raw[start..end].to_string(), style));
+    if visible.hidden_left {
+        spans.push(Span::styled(
+            theme::LEFT_OVERFLOW_MARKER,
+            theme::overflow_marker(current_find),
+        ));
+    }
+    spans.extend(styled_graphemes(
+        visible.graphemes,
+        level.as_ref(),
+        &filter_ranges,
+        &find_ranges,
+        current_find,
+    ));
+    if visible.hidden_right {
+        spans.push(Span::styled(
+            theme::RIGHT_OVERFLOW_MARKER,
+            theme::overflow_marker(current_find),
+        ));
     }
     Line::from(spans)
+}
+
+fn styled_wrapped_log_lines(
+    raw: &str,
+    filter: Option<&Regex>,
+    find_query: &str,
+    current_find: bool,
+    start_cell: u64,
+    content_width: usize,
+    limit: usize,
+) -> Vec<Line<'static>> {
+    let level = log_level_field(raw);
+    let rows = wrapped_slices(raw, start_cell, content_width, limit);
+    let visible_bytes = rows.iter().flat_map(|row| row.graphemes.iter()).fold(
+        None,
+        |range: Option<std::ops::Range<usize>>, grapheme| {
+            Some(match range {
+                Some(range) => {
+                    range.start.min(grapheme.source.start)..range.end.max(grapheme.source.end)
+                }
+                None => grapheme.source.clone(),
+            })
+        },
+    );
+    let filter_ranges = visible_bytes
+        .as_ref()
+        .map_or_else(Vec::new, |range| regex_match_ranges_in(raw, filter, range));
+    let find_ranges = visible_bytes.as_ref().map_or_else(Vec::new, |range| {
+        literal_match_ranges_in(raw, find_query, range)
+    });
+    rows.into_iter()
+        .map(|row| {
+            let mut spans = Vec::new();
+            if row.continuation {
+                spans.push(Span::styled(
+                    theme::WRAPPED_CONTINUATION_MARKER,
+                    theme::wrapped_continuation(current_find),
+                ));
+            }
+            spans.extend(styled_graphemes(
+                row.graphemes,
+                level.as_ref(),
+                &filter_ranges,
+                &find_ranges,
+                current_find,
+            ));
+            Line::from(spans)
+        })
+        .collect()
+}
+
+fn visible_byte_range(graphemes: &[VisibleGrapheme]) -> Option<std::ops::Range<usize>> {
+    let first = graphemes.first()?;
+    let last = graphemes.last()?;
+    Some(first.source.start..last.source.end)
+}
+
+fn regex_match_ranges_in(
+    raw: &str,
+    filter: Option<&Regex>,
+    visible: &std::ops::Range<usize>,
+) -> Vec<std::ops::Range<usize>> {
+    filter
+        .into_iter()
+        .flat_map(|filter| filter.find_iter(raw))
+        .skip_while(|found| found.end() <= visible.start)
+        .take_while(|found| found.start() < visible.end)
+        .filter(|found| !found.is_empty())
+        .map(|found| found.range())
+        .collect()
+}
+
+fn styled_graphemes(
+    graphemes: Vec<VisibleGrapheme>,
+    level: Option<&(std::ops::Range<usize>, theme::LogLevel)>,
+    filter_ranges: &[std::ops::Range<usize>],
+    find_ranges: &[std::ops::Range<usize>],
+    current_find: bool,
+) -> Vec<Span<'static>> {
+    graphemes
+        .into_iter()
+        .map(|grapheme| {
+            let span_level = level
+                .filter(|(range, _)| ranges_overlap(range, &grapheme.source))
+                .map(|(_, level)| *level);
+            let style = theme::log_span(
+                span_level,
+                current_find,
+                find_ranges
+                    .iter()
+                    .any(|range| ranges_overlap(range, &grapheme.source)),
+                filter_ranges
+                    .iter()
+                    .any(|range| ranges_overlap(range, &grapheme.source)),
+            );
+            Span::styled(grapheme.text, style)
+        })
+        .collect()
+}
+
+fn ranges_overlap(left: &std::ops::Range<usize>, right: &std::ops::Range<usize>) -> bool {
+    left.start < right.end && right.start < left.end
 }
 
 fn log_level_field(raw: &str) -> Option<(std::ops::Range<usize>, theme::LogLevel)> {
     let fields = raw
         .split_whitespace()
+        .take(6)
         .map(|field| {
             let start = field.as_ptr() as usize - raw.as_ptr() as usize;
             (start..start + field.len(), field)
@@ -484,19 +614,4 @@ fn log_level_field(raw: &str) -> Option<(std::ops::Range<usize>, theme::LogLevel
         None
     }?;
     theme::LogLevel::parse(candidate.1).map(|level| (candidate.0.clone(), level))
-}
-
-fn literal_match_ranges(raw: &str, query: &str) -> Vec<std::ops::Range<usize>> {
-    if query.is_empty() {
-        return Vec::new();
-    }
-    let lowercase = raw.to_lowercase();
-    let needle = query.to_lowercase();
-    lowercase
-        .match_indices(&needle)
-        .filter_map(|(start, found)| {
-            let end = start + found.len();
-            (raw.is_char_boundary(start) && raw.is_char_boundary(end)).then_some(start..end)
-        })
-        .collect()
 }

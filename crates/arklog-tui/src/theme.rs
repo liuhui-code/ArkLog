@@ -37,6 +37,15 @@ pub(crate) const DEVICE_FIELD_GAP: &str = "  ";
 pub(crate) const SELECTED_ROW_MARKER: &str = "▶ ";
 pub(crate) const UNSELECTED_ROW_MARKER: &str = "  ";
 pub(crate) const MIN_TERMINAL_MESSAGE: &str = "ArkLog needs at least 72 x 16 terminal cells";
+pub(crate) const HORIZONTAL_SCROLL_STEP_CELLS: u64 = 8;
+pub(crate) const LOG_TAB_STOP_CELLS: u64 = 4;
+pub(crate) const LEFT_OVERFLOW_MARKER: &str = "‹";
+pub(crate) const RIGHT_OVERFLOW_MARKER: &str = "›";
+pub(crate) const WRAPPED_CONTINUATION_MARKER: &str = "↪";
+pub(crate) const OVERFLOW_MARKER_WIDTH_CELLS: u64 = 1;
+pub(crate) const WRAPPED_CONTINUATION_WIDTH_CELLS: u64 = 1;
+pub(crate) const MIN_LOG_CONTENT_WIDTH_CELLS: u64 = 1;
+pub(crate) const HORIZONTAL_MATCH_MARKER_RESERVE_CELLS: u64 = OVERFLOW_MARKER_WIDTH_CELLS * 2;
 
 const PANEL_VERTICAL_BORDER_CELLS: u16 = 2;
 const MIN_PANEL_CONTENT_ROWS: u16 = 1;
@@ -112,6 +121,18 @@ pub(crate) fn selected_row(selected: bool) -> Style {
     }
 }
 
+pub(crate) fn overflow_marker(current_match_line: bool) -> Style {
+    let mut style = text(Tone::Muted);
+    if current_match_line {
+        style = style.bg(SURFACE_0);
+    }
+    style
+}
+
+pub(crate) fn wrapped_continuation(current_match_line: bool) -> Style {
+    overflow_marker(current_match_line)
+}
+
 pub(crate) fn panel_content_height(height: u16) -> usize {
     height
         .saturating_sub(PANEL_VERTICAL_BORDER_CELLS)
@@ -120,6 +141,10 @@ pub(crate) fn panel_content_height(height: u16) -> usize {
 
 pub(crate) fn input_content_width(area: Rect) -> usize {
     area.width.saturating_sub(PANEL_HORIZONTAL_BORDER_CELLS) as usize
+}
+
+pub(crate) fn panel_content_width(width: u16) -> usize {
+    width.saturating_sub(PANEL_HORIZONTAL_BORDER_CELLS) as usize
 }
 
 pub(crate) fn input_cursor_limit(width: usize) -> usize {

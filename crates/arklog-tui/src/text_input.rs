@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-const MAX_INPUT_BYTES: usize = 4 * 1024;
+pub(crate) const MAX_INPUT_BYTES: usize = 4 * 1024;
 
 pub trait Clipboard {
     fn get_text(&mut self) -> Result<String, String>;
@@ -69,6 +69,15 @@ impl TextInput {
     }
 
     pub fn insert_text(&mut self, text: &str) {
+        self.replace_selection(text);
+    }
+
+    pub fn replace_all(&mut self, text: &str) {
+        if self.text == text {
+            return;
+        }
+        self.anchor = Some(0);
+        self.cursor = self.text.len();
         self.replace_selection(text);
     }
 

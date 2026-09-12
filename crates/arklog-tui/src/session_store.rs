@@ -8,6 +8,7 @@ use regex::{Regex, RegexBuilder};
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 const MAX_REGEX_BYTES: usize = 4 * 1024;
 const REGEX_COMPILED_LIMIT: usize = 1024 * 1024;
+const FIND_COMPILED_LIMIT: usize = 512 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QueryRebuildWork {
@@ -32,6 +33,7 @@ pub struct SessionLogStore {
     filter: Option<Regex>,
     filter_valid: bool,
     find_query: String,
+    find: Option<Regex>,
     last_rebuild_work: QueryRebuildWork,
 }
 
@@ -60,6 +62,7 @@ impl SessionLogStore {
             filter: None,
             filter_valid: true,
             find_query: String::new(),
+            find: None,
             last_rebuild_work: QueryRebuildWork::default(),
         })
     }
@@ -123,11 +126,28 @@ impl SessionLogStore {
 
     pub fn set_find(&mut self, query: &str) -> io::Result<()> {
         self.last_rebuild_work = QueryRebuildWork::default();
-        let normalized = query.to_lowercase();
-        if self.find_query == normalized {
+        if self.find_query == query {
             return Ok(());
         }
-        self.find_query = normalized;
+        if query.len() > MAX_REGEX_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Find query exceeds {MAX_REGEX_BYTES} bytes"),
+            ));
+        }
+        self.find = if query.is_empty() {
+            None
+        } else {
+            Some(
+                RegexBuilder::new(&regex::escape(query))
+                    .case_insensitive(true)
+                    .size_limit(FIND_COMPILED_LIMIT)
+                    .dfa_size_limit(FIND_COMPILED_LIMIT)
+                    .build()
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
+            )
+        };
+        self.find_query = query.to_string();
         self.rebuild_find_index()
     }
 
@@ -186,6 +206,7 @@ impl SessionLogStore {
         replacement.filter = self.filter.clone();
         replacement.filter_valid = self.filter_valid;
         replacement.find_query.clone_from(&self.find_query);
+        replacement.find.clone_from(&self.find);
         let old_session = std::mem::replace(self, replacement);
         drop(old_session);
         Ok(())
@@ -196,6 +217,7 @@ impl SessionLogStore {
             + self.directory.to_string_lossy().len()
             + self.find_query.capacity()
             + self.filter.as_ref().map_or(0, |_| REGEX_COMPILED_LIMIT)
+            + self.find.as_ref().map_or(0, |_| FIND_COMPILED_LIMIT)
             + self.data_writer.as_ref().map_or(0, BufWriter::capacity)
             + self
                 .raw_index_writer
@@ -246,7 +268,7 @@ impl SessionLogStore {
         self.flush()?;
         let filter = self.filter.clone();
         let filter_valid = self.filter_valid;
-        let find_query = self.find_query.clone();
+        let find = self.find.clone();
         let visible_writer = self
             .visible_index_writer
             .as_mut()
@@ -266,7 +288,7 @@ impl SessionLogStore {
             let line = read_next_record(&mut data_reader)?;
             if filter_valid && filter.as_ref().is_none_or(|filter| filter.is_match(&line)) {
                 append_u64(visible_writer, raw_index)?;
-                if !find_query.is_empty() && line.to_lowercase().contains(&find_query) {
+                if find.as_ref().is_some_and(|find| find.is_match(&line)) {
                     append_u64(find_writer, visible_count)?;
                     find_count += 1;
                 }
@@ -309,7 +331,7 @@ impl SessionLogStore {
     }
 
     fn find_matches(&self, line: &str) -> bool {
-        !self.find_query.is_empty() && line.to_lowercase().contains(&self.find_query)
+        self.find.as_ref().is_some_and(|find| find.is_match(line))
     }
 
     fn rebuild_find_index(&mut self) -> io::Result<()> {
@@ -318,7 +340,7 @@ impl SessionLogStore {
         if self.find_query.is_empty() {
             return Ok(());
         }
-        let find_query = self.find_query.clone();
+        let find = self.find.clone();
         let visible_reader = self
             .visible_index_reader
             .as_mut()
@@ -341,7 +363,7 @@ impl SessionLogStore {
             data_reader.seek_relative((data_offset - next_data_offset) as i64)?;
             let line = read_next_record(&mut data_reader)?;
             next_data_offset = data_offset + 8 + line.len() as u64;
-            if line.to_lowercase().contains(&find_query) {
+            if find.as_ref().is_some_and(|find| find.is_match(&line)) {
                 append_u64(
                     self.find_index_writer.as_mut().expect("find index writer"),
                     visible_index,

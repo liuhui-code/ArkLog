@@ -39,6 +39,9 @@ fn render_hilog(
                     find_status: (0, 0),
                     current_find_visible_index,
                     window_start: 0,
+                    window_start_cell: 0,
+                    horizontal_offset: 0,
+                    soft_wrap: false,
                     lines,
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::None,
@@ -182,6 +185,7 @@ fn presentation_modules_consume_semantic_tokens_instead_of_owning_design_values(
     for (name, source) in [
         ("ui.rs", include_str!("../src/ui.rs")),
         ("input_ui.rs", include_str!("../src/input_ui.rs")),
+        ("log_geometry.rs", include_str!("../src/log_geometry.rs")),
     ] {
         assert!(!source.contains("Color::"), "{name} owns a raw color");
         assert!(

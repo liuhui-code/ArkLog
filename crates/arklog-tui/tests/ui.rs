@@ -36,6 +36,9 @@ fn renders_compact_shared_workspace_without_duplicate_device_or_hilog_status() {
                     find_status: (0, 0),
                     current_find_visible_index: None,
                     window_start: 0,
+                    window_start_cell: 0,
+                    horizontal_offset: 0,
+                    soft_wrap: false,
                     lines: &lines,
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::None,
@@ -107,6 +110,9 @@ fn renders_the_real_connection_failure_inside_the_no_devices_status() {
                     find_status: (0, 0),
                     current_find_visible_index: None,
                     window_start: 0,
+                    window_start_cell: 0,
+                    horizontal_offset: 0,
+                    soft_wrap: false,
                     lines: &[],
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::None,
@@ -154,6 +160,9 @@ fn renders_the_real_connection_failure_inside_the_no_devices_status() {
                     find_status: (0, 0),
                     current_find_visible_index: None,
                     window_start: 0,
+                    window_start_cell: 0,
+                    horizontal_offset: 0,
+                    soft_wrap: false,
                     lines: &[],
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::None,
@@ -219,6 +228,9 @@ fn renders_all_connected_devices_in_the_device_list_view() {
                     find_status: (0, 0),
                     current_find_visible_index: None,
                     window_start: 0,
+                    window_start_cell: 0,
+                    horizontal_offset: 0,
+                    soft_wrap: false,
                     lines: &[],
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::Devices,
@@ -292,6 +304,9 @@ fn device_list_windows_a_large_collection_around_the_selection() {
                     find_status: (0, 0),
                     current_find_visible_index: None,
                     window_start: 0,
+                    window_start_cell: 0,
+                    horizontal_offset: 0,
+                    soft_wrap: false,
                     lines: &[],
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::Devices,
@@ -348,6 +363,9 @@ fn highlights_every_non_empty_regex_match_without_changing_the_raw_line() {
                     find_status: (0, 0),
                     current_find_visible_index: None,
                     window_start: 0,
+                    window_start_cell: 0,
+                    horizontal_offset: 0,
+                    soft_wrap: false,
                     lines: &lines,
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::None,
@@ -401,6 +419,9 @@ fn highlights_all_find_matches_and_distinguishes_the_current_match_line() {
                     find_status: (2, 2),
                     current_find_visible_index: Some(1),
                     window_start: 0,
+                    window_start_cell: 0,
+                    horizontal_offset: 0,
+                    soft_wrap: false,
                     lines: &lines,
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::None,
@@ -469,6 +490,9 @@ fn windows_large_fault_lists_and_raw_diagnostics_to_the_visible_area() {
                     find_status: (0, 0),
                     current_find_visible_index: None,
                     window_start: 0,
+                    window_start_cell: 0,
+                    horizontal_offset: 0,
+                    soft_wrap: false,
                     lines: &[],
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::None,
@@ -494,6 +518,286 @@ fn windows_large_fault_lists_and_raw_diagnostics_to_the_visible_area() {
     assert!(!rendered.contains("fault-29-line-000"));
     assert!(rendered.contains("PgUp/PgDn inspect"));
     assert!(!rendered.contains("Ctrl+F find"));
+}
+
+#[test]
+fn horizontal_slice_marks_only_content_that_is_actually_hidden() {
+    let lines = vec!["abcdefghijklmnopqrstuvwxyz".repeat(4), "short".to_string()];
+    let backend = TestBackend::new(72, 16);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    terminal
+        .draw(|frame| {
+            render_app(
+                frame,
+                AppView {
+                    device_id: Some("USB-01"),
+                    device_status: "online",
+                    devices: &[],
+                    selected_device: 0,
+                    tab: LogTab::HiLog,
+                    stream_state: &StreamState::Streaming,
+                    pending_stream_action: None,
+                    connection_status: "Devices ready",
+                    fault_status: "Not loaded",
+                    action_error: None,
+                    raw_count: 2,
+                    visible_count: 2,
+                    following_latest: true,
+                    filter_query: "",
+                    active_filter: None,
+                    filter_error: None,
+                    find_query: "",
+                    find_status: (0, 0),
+                    current_find_visible_index: None,
+                    window_start: 0,
+                    window_start_cell: 0,
+                    horizontal_offset: 20,
+                    soft_wrap: false,
+                    lines: &lines,
+                    input_mode: InputMode::Normal,
+                    overlay: OverlayMode::None,
+                    input: TextInputView::at_end(""),
+                    fault_result: None,
+                    selected_fault: 0,
+                    fault_scroll: 0,
+                },
+            );
+        })
+        .expect("draw");
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[(1, 4)].symbol(), "‹");
+    assert_eq!(buffer[(2, 4)].symbol(), "u");
+    assert_eq!(buffer[(70, 4)].symbol(), "›");
+    assert_eq!(buffer[(1, 5)].symbol(), "‹");
+    assert_ne!(buffer[(70, 5)].symbol(), "›");
+}
+
+#[test]
+fn short_and_exact_width_lines_have_no_overflow_markers_at_column_zero() {
+    let lines = vec!["short".to_string(), "x".repeat(70)];
+    let backend = TestBackend::new(72, 16);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    terminal
+        .draw(|frame| {
+            render_app(
+                frame,
+                AppView {
+                    device_id: Some("USB-01"),
+                    device_status: "online",
+                    devices: &[],
+                    selected_device: 0,
+                    tab: LogTab::HiLog,
+                    stream_state: &StreamState::Streaming,
+                    pending_stream_action: None,
+                    connection_status: "Devices ready",
+                    fault_status: "Not loaded",
+                    action_error: None,
+                    raw_count: 2,
+                    visible_count: 2,
+                    following_latest: true,
+                    filter_query: "",
+                    active_filter: None,
+                    filter_error: None,
+                    find_query: "",
+                    find_status: (0, 0),
+                    current_find_visible_index: None,
+                    window_start: 0,
+                    window_start_cell: 0,
+                    horizontal_offset: 0,
+                    soft_wrap: false,
+                    lines: &lines,
+                    input_mode: InputMode::Normal,
+                    overlay: OverlayMode::None,
+                    input: TextInputView::at_end(""),
+                    fault_result: None,
+                    selected_fault: 0,
+                    fault_scroll: 0,
+                },
+            );
+        })
+        .expect("draw");
+
+    let buffer = terminal.backend().buffer();
+    for y in [4, 5] {
+        assert_ne!(buffer[(1, y)].symbol(), "‹");
+        assert_ne!(buffer[(70, y)].symbol(), "›");
+    }
+}
+
+#[test]
+fn huge_offsets_crop_unicode_graphemes_and_keep_find_highlight_on_source_text() {
+    let raw = format!("{}中e\u{301}👩‍💻\tNEEDLE", "x".repeat(65_540));
+    let lines = vec![raw.clone()];
+    let backend = TestBackend::new(72, 16);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    terminal
+        .draw(|frame| {
+            render_app(
+                frame,
+                AppView {
+                    device_id: Some("USB-01"),
+                    device_status: "online",
+                    devices: &[],
+                    selected_device: 0,
+                    tab: LogTab::HiLog,
+                    stream_state: &StreamState::Streaming,
+                    pending_stream_action: None,
+                    connection_status: "Devices ready",
+                    fault_status: "Not loaded",
+                    action_error: None,
+                    raw_count: 1,
+                    visible_count: 1,
+                    following_latest: false,
+                    filter_query: "",
+                    active_filter: None,
+                    filter_error: None,
+                    find_query: "needle",
+                    find_status: (1, 1),
+                    current_find_visible_index: Some(0),
+                    window_start: 0,
+                    window_start_cell: 0,
+                    horizontal_offset: 65_540,
+                    soft_wrap: false,
+                    lines: &lines,
+                    input_mode: InputMode::Normal,
+                    overlay: OverlayMode::None,
+                    input: TextInputView::at_end(""),
+                    fault_result: None,
+                    selected_fault: 0,
+                    fault_scroll: 0,
+                },
+            );
+        })
+        .expect("draw");
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[(1, 4)].symbol(), "‹");
+    assert_eq!(buffer[(2, 4)].symbol(), "中");
+    let match_start = find_cell_sequence(buffer.content(), "NEEDLE");
+    assert!(buffer.content()[match_start]
+        .modifier
+        .contains(ratatui::style::Modifier::UNDERLINED));
+    assert_eq!(
+        lines[0], raw,
+        "rendering must not rewrite the stored record"
+    );
+}
+
+#[test]
+fn soft_wrap_renders_continuations_without_changing_record_count_or_source() {
+    let raw = format!("{}TAIL", "a".repeat(70));
+    let lines = vec![raw.clone()];
+    let backend = TestBackend::new(72, 16);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    terminal
+        .draw(|frame| {
+            render_app(
+                frame,
+                AppView {
+                    device_id: Some("USB-01"),
+                    device_status: "online",
+                    devices: &[],
+                    selected_device: 0,
+                    tab: LogTab::HiLog,
+                    stream_state: &StreamState::Streaming,
+                    pending_stream_action: None,
+                    connection_status: "Devices ready",
+                    fault_status: "Not loaded",
+                    action_error: None,
+                    raw_count: 1,
+                    visible_count: 1,
+                    following_latest: false,
+                    filter_query: "",
+                    active_filter: None,
+                    filter_error: None,
+                    find_query: "",
+                    find_status: (0, 0),
+                    current_find_visible_index: None,
+                    window_start: 0,
+                    window_start_cell: 0,
+                    horizontal_offset: 0,
+                    soft_wrap: true,
+                    lines: &lines,
+                    input_mode: InputMode::Normal,
+                    overlay: OverlayMode::None,
+                    input: TextInputView::at_end(""),
+                    fault_result: None,
+                    selected_fault: 0,
+                    fault_scroll: 0,
+                },
+            );
+        })
+        .expect("draw");
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[(1, 4)].symbol(), "a");
+    assert_eq!(buffer[(1, 5)].symbol(), "↪");
+    assert_eq!(buffer[(2, 5)].symbol(), "T");
+    let rendered = buffer
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(rendered.contains("1 / 1 VISIBLE"));
+    assert!(rendered.contains("WRAP ON"));
+    assert_eq!(lines[0], raw);
+}
+
+#[test]
+fn a_match_inside_a_combining_grapheme_highlights_the_intact_terminal_cell() {
+    let lines = vec!["e\u{301} tail".to_string()];
+    let backend = TestBackend::new(72, 16);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    terminal
+        .draw(|frame| {
+            render_app(
+                frame,
+                AppView {
+                    device_id: Some("USB-01"),
+                    device_status: "online",
+                    devices: &[],
+                    selected_device: 0,
+                    tab: LogTab::HiLog,
+                    stream_state: &StreamState::Streaming,
+                    pending_stream_action: None,
+                    connection_status: "Devices ready",
+                    fault_status: "Not loaded",
+                    action_error: None,
+                    raw_count: 1,
+                    visible_count: 1,
+                    following_latest: false,
+                    filter_query: "",
+                    active_filter: None,
+                    filter_error: None,
+                    find_query: "\u{301}",
+                    find_status: (1, 1),
+                    current_find_visible_index: Some(0),
+                    window_start: 0,
+                    window_start_cell: 0,
+                    horizontal_offset: 0,
+                    soft_wrap: true,
+                    lines: &lines,
+                    input_mode: InputMode::Normal,
+                    overlay: OverlayMode::None,
+                    input: TextInputView::at_end(""),
+                    fault_result: None,
+                    selected_fault: 0,
+                    fault_scroll: 0,
+                },
+            );
+        })
+        .expect("draw");
+
+    assert_eq!(terminal.backend().buffer()[(1, 4)].symbol(), "e\u{301}");
+    assert!(terminal.backend().buffer()[(1, 4)]
+        .modifier
+        .contains(ratatui::style::Modifier::UNDERLINED));
 }
 
 fn find_cell_sequence(cells: &[ratatui::buffer::Cell], needle: &str) -> usize {

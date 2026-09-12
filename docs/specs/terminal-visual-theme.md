@@ -52,6 +52,9 @@ unrelated field foregrounds remain intact.
   border title without consuming a content row.
 - HiLog always receives the full workspace width and has no Details inspector. Fault Log keeps
   its entry list and raw-diagnostic inspector.
+- Horizontal overflow and soft-wrap continuation markers use neutral semantic styling and appear
+  only when their corresponding hidden or continued content exists. Their glyphs, cell widths,
+  tab stop, and horizontal movement step are design tokens rather than raw renderer values.
 
 ## Design-token ownership
 
