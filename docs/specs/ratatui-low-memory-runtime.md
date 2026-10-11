@@ -40,6 +40,12 @@ without bound.
 10. The release process must remain below 50 MiB RSS during the automated
     100,000-line stress scenario on each supported desktop platform.
 11. Character commands require the Control modifier and `Ctrl+Q` quits.
+    Unmodified `F1` and `F2` select HiLog and Fault Log directly, including from
+    a query editor or device overlay. Selection closes that editor or overlay
+    without applying its draft, preserves session data and applied queries,
+    and remains on the selected view when the key repeats. Normal browsing
+    also accepts `Tab` and `Shift+Tab`; modified terminal tab shortcuts are not
+    application view-navigation commands.
     Filter/Find inputs support bounded desktop editing with Ctrl on Windows and
     Command on macOS: select/copy/cut/paste, undo/redo, cursor selection, plus
     platform-native word/line navigation and deletion. Terminal log-copy

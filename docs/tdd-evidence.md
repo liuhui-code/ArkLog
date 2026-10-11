@@ -521,3 +521,51 @@ RED: official HDC rows disappeared; stale Fault results crossed devices; async s
 GREEN: focused discovery, controller stream/Fault, stream-intent/UI, store, runtime, and slow-consumer tests now pass.
 
 Protected behavior: lifecycle display follows confirmed state while queued intent stays separate; cancellation survives refresh; final logs survive; redraw and per-tick work stay bounded; unchanged queries do zero rebuild work.
+
+## Windows Terminal log-view navigation (2026-09-28)
+
+RED observed at the real terminal key-dispatch entry:
+
+- `shift_tab_switches_between_the_log_views` stayed on HiLog after a BackTab
+  event instead of switching to Fault Log.
+- `function_keys_select_log_views_even_while_editing_or_browsing_devices`
+  stayed on HiLog when F2 was pressed from the regex editor.
+- The minimum-width TestBackend view lacked a visible F1/F2 shortcut hint.
+
+GREEN: those focused tests pass after supporting BackTab, direct F1/F2 view
+selection, and the compact header hint. Public keymap tests additionally check
+all view/overlay contexts and leave modified function keys unclaimed. These
+tests are not Unix-gated and cover repeated Windows-style Press events as well
+as Repeat events without reversing the selected view. Session logs, the applied
+filter, and Find remain intact across view selection.
+
+Verification on macOS after the navigation slice:
+
+- Focused binary/keymap/clear-UI/theme/input/render tests passed.
+- `cargo test --workspace`, `cargo check -p arklog`, `pnpm test`, and
+  `pnpm build` passed.
+- `pnpm memory:check` passed with 100,000 lines and peak RSS 12,849,152 bytes,
+  below the 52,428,800-byte budget.
+- `cargo check -p arklog --target x86_64-pc-windows-msvc --tests` passed. This
+  compiles the cross-platform event-dispatch regressions for Windows; it does
+  not claim a native Windows Terminal interactive test.
+- `cargo fmt --all --check` and `git diff --check` passed.
+
+## Windows Ctrl+L freeze diagnosis (2026-10-11)
+
+The reported failure is Windows Ctrl+L: the displayed count becomes zero and
+all keyboard commands stop responding. A fake-HDC Clear regression on macOS
+confirms that Clear preserves the live stream, restores following-latest, and
+displays output sent after Clear. It does not reproduce the complete UI freeze.
+
+RED/GREEN diagnostic slices cover Clear completion at the Ctrl+L dispatch entry
+and ordered start/end events for the next redraw. The trace now distinguishes
+the synchronous clear operation from terminal sizing, session-window reading,
+and frame drawing, without recording log content or adding per-poll diagnostic
+traffic. A Windows execution trace remains needed to identify the original
+blocked operation; this freeze is not claimed fixed.
+
+Verification: focused Clear/key-dispatch/diagnostics tests, `pnpm test`,
+`pnpm build`, `cargo test --workspace`, `cargo check -p arklog`, Windows MSVC
+test compilation, `cargo fmt --all --check`, and `git diff --check` passed.
+The Windows check compiles tests; it does not run a Windows terminal session.

@@ -1,7 +1,7 @@
 use std::env;
 use std::io;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use arklog::{
     app_layout, render_app, run_memory_probe, ActionStatus, AppCommand, AppView, ArkLogController,
@@ -143,6 +143,7 @@ struct TerminalApp {
     viewport_height: usize,
     fault_scroll: usize,
     diagnostics: Option<RuntimeDiagnostics>,
+    trace_clear_frame: bool,
 }
 
 struct RedrawState {
@@ -197,6 +198,7 @@ impl TerminalApp {
             viewport_height: 1,
             fault_scroll: 0,
             diagnostics,
+            trace_clear_frame: false,
         }
     }
 
@@ -222,6 +224,13 @@ impl TerminalApp {
             }
             self.observe_runtime();
             if redraw.take() {
+                let trace_clear_frame = std::mem::take(&mut self.trace_clear_frame);
+                let frame_started = Instant::now();
+                if trace_clear_frame {
+                    if let Some(diagnostics) = &self.diagnostics {
+                        diagnostics.record_clear_frame_started();
+                    }
+                }
                 let size = terminal.size()?;
                 self.viewport_height = app_layout(size.into()).log_content_height;
                 let window_start = self
@@ -269,6 +278,11 @@ impl TerminalApp {
                         },
                     );
                 })?;
+                if trace_clear_frame {
+                    if let Some(diagnostics) = &self.diagnostics {
+                        diagnostics.record_clear_frame_finished(frame_started.elapsed());
+                    }
+                }
             }
 
             if event::poll(Duration::from_millis(30))? {
@@ -329,7 +343,11 @@ impl TerminalApp {
             return;
         }
         match key.code {
-            KeyCode::Tab => self.controller.state_mut().next_tab(),
+            KeyCode::Tab | KeyCode::BackTab
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                self.controller.state_mut().next_tab();
+            }
             KeyCode::End => self.controller.state_mut().follow_latest(),
             KeyCode::Left => {
                 let result = self.controller.previous_device();
@@ -359,6 +377,12 @@ impl TerminalApp {
         }
         match command {
             AppCommand::Quit => self.should_quit = true,
+            AppCommand::SelectLogTab(tab) => {
+                self.controller.state_mut().select_tab(tab);
+                self.overlay = OverlayMode::None;
+                self.input_mode = InputMode::Normal;
+                self.input = TextInput::new("");
+            }
             AppCommand::ToggleStream => self.toggle_stream(),
             AppCommand::Refresh => self.refresh(),
             AppCommand::ToggleDevices => {
@@ -395,11 +419,16 @@ impl TerminalApp {
             }
             AppCommand::FollowLatest => self.controller.state_mut().follow_latest(),
             AppCommand::Clear => {
+                let started = Instant::now();
                 let result = self
                     .controller
                     .state_mut()
                     .clear()
                     .map_err(|error| error.to_string());
+                if let Some(diagnostics) = &self.diagnostics {
+                    diagnostics.record_clear_finished(&result, started.elapsed());
+                }
+                self.trace_clear_frame = true;
                 self.record(result);
             }
         }
@@ -520,7 +549,128 @@ impl TerminalApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_relaunch_in_windows_terminal, RedrawState};
+    use super::{should_relaunch_in_windows_terminal, RedrawState, TerminalApp};
+    use arklog::{ArkLogController, InputMode, LogTab, OverlayMode, TextInput};
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+    #[test]
+    fn shift_tab_switches_between_the_log_views() {
+        let controller =
+            ArkLogController::new("hdc-must-not-be-launched", Vec::new()).expect("controller");
+        let mut app = TerminalApp::new(controller, None, None);
+
+        app.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+
+        assert_eq!(app.controller.state().tab(), LogTab::FaultLog);
+        app.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(app.controller.state().tab(), LogTab::HiLog);
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.controller.state().tab(), LogTab::FaultLog);
+    }
+
+    #[test]
+    fn modified_terminal_tab_shortcuts_do_not_switch_log_views() {
+        let controller =
+            ArkLogController::new("hdc-must-not-be-launched", Vec::new()).expect("controller");
+        let mut app = TerminalApp::new(controller, None, None);
+
+        for code in [KeyCode::Tab, KeyCode::BackTab] {
+            for modifiers in [
+                KeyModifiers::CONTROL,
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+                KeyModifiers::ALT,
+                KeyModifiers::ALT | KeyModifiers::SHIFT,
+                KeyModifiers::SUPER,
+            ] {
+                app.handle_key(KeyEvent::new(code, modifiers));
+                assert_eq!(app.controller.state().tab(), LogTab::HiLog);
+            }
+        }
+    }
+
+    #[test]
+    fn modified_function_keys_and_tab_in_editors_preserve_navigation_and_drafts() {
+        let controller =
+            ArkLogController::new("hdc-must-not-be-launched", Vec::new()).expect("controller");
+        let mut app = TerminalApp::new(controller, None, None);
+
+        for mode in [InputMode::Normal, InputMode::Filter, InputMode::Find] {
+            for overlay in [OverlayMode::None, OverlayMode::Devices] {
+                app.input_mode = mode;
+                app.overlay = overlay;
+                app.input = TextInput::new("unapplied draft");
+                for function in [1, 2] {
+                    for modifier in [
+                        KeyModifiers::CONTROL,
+                        KeyModifiers::ALT,
+                        KeyModifiers::SHIFT,
+                        KeyModifiers::SUPER,
+                    ] {
+                        app.handle_key(KeyEvent::new(KeyCode::F(function), modifier));
+                        assert_eq!(app.controller.state().tab(), LogTab::HiLog);
+                        assert_eq!(app.input_mode, mode);
+                        assert_eq!(app.overlay, overlay);
+                        assert_eq!(app.input.text(), "unapplied draft");
+                    }
+                }
+                if mode != InputMode::Normal || overlay != OverlayMode::None {
+                    for code in [KeyCode::Tab, KeyCode::BackTab] {
+                        for modifier in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+                            app.handle_key(KeyEvent::new(code, modifier));
+                            assert_eq!(app.controller.state().tab(), LogTab::HiLog);
+                            assert_eq!(app.input_mode, mode);
+                            assert_eq!(app.overlay, overlay);
+                            assert_eq!(app.input.text(), "unapplied draft");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn function_keys_select_log_views_even_while_editing_or_browsing_devices() {
+        let mut controller =
+            ArkLogController::new("hdc-must-not-be-launched", Vec::new()).expect("controller");
+        controller
+            .state_mut()
+            .append_lines(["kept log"])
+            .expect("log");
+        controller.state_mut().apply_filter("kept");
+        controller.state_mut().set_find("log").expect("find");
+        let mut app = TerminalApp::new(controller, None, None);
+        app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+        app.input = TextInput::new("unapplied draft");
+
+        app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
+
+        assert_eq!(app.controller.state().tab(), LogTab::FaultLog);
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert_eq!(app.controller.state().raw_count(), 1);
+        assert_eq!(app.controller.state().filter_query(), "kept");
+        assert_eq!(app.controller.state().find_query(), "log");
+        for kind in [KeyEventKind::Press, KeyEventKind::Repeat] {
+            let mut repeated = KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE);
+            repeated.kind = kind;
+            app.handle_key(repeated);
+            assert_eq!(app.controller.state().tab(), LogTab::FaultLog);
+        }
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert_eq!(app.overlay, OverlayMode::Devices);
+        app.handle_key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
+        assert_eq!(app.controller.state().tab(), LogTab::HiLog);
+        assert_eq!(app.overlay, OverlayMode::None);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        app.input = TextInput::new("unapplied find draft");
+        app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
+        assert_eq!(app.controller.state().tab(), LogTab::FaultLog);
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert_eq!(app.controller.state().find_query(), "log");
+        assert_eq!(app.controller.state().filter_query(), "kept");
+        assert_eq!(app.controller.state().raw_count(), 1);
+    }
 
     #[test]
     fn only_a_standalone_legacy_windows_console_relaunches_in_windows_terminal() {
@@ -540,5 +690,30 @@ mod tests {
         redraw.mark();
         assert!(redraw.take());
         assert!(!redraw.take());
+    }
+
+    #[test]
+    fn ctrl_l_records_when_clearing_the_live_view_finishes() {
+        let path =
+            std::env::temp_dir().join(format!("arklog-clear-test-{}.log", std::process::id()));
+        let log = arklog::ExecutionLog::start(&path, 4096).expect("execution log");
+        let mut controller =
+            ArkLogController::new("hdc-must-not-be-launched", Vec::new()).expect("controller");
+        controller
+            .state_mut()
+            .append_lines(["private log body"])
+            .expect("initial logs");
+        let mut app = TerminalApp::new(controller, None, Some(log));
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+
+        assert_eq!(app.controller.state().raw_count(), 0);
+        drop(app);
+        let content = std::fs::read_to_string(&path).expect("clear diagnostics");
+        std::fs::remove_file(path).expect("remove test log");
+        assert!(content.contains("event=clear_finished"), "{content}");
+        assert!(content.contains("result=\"ok\""), "{content}");
+        assert!(content.contains("elapsed_ms="), "{content}");
+        assert!(!content.contains("private log body"), "{content}");
     }
 }

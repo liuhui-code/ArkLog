@@ -3,7 +3,7 @@ use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::thread::{self, JoinHandle};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{ConnectionState, FaultLogState, StreamAction, StreamState};
 
@@ -106,6 +106,27 @@ impl RuntimeDiagnostics {
 
     pub fn record_command(&self, name: &str) {
         self.log.record("command", &[("name", name)]);
+    }
+
+    pub fn record_clear_finished(&self, result: &Result<(), String>, elapsed: Duration) {
+        let elapsed = elapsed.as_millis().to_string();
+        self.log.record(
+            "clear_finished",
+            &[
+                ("result", if result.is_ok() { "ok" } else { "error" }),
+                ("elapsed_ms", &elapsed),
+            ],
+        );
+    }
+
+    pub fn record_clear_frame_started(&self) {
+        self.log.record("clear_frame_started", &[]);
+    }
+
+    pub fn record_clear_frame_finished(&self, elapsed: Duration) {
+        let elapsed = elapsed.as_millis().to_string();
+        self.log
+            .record("clear_frame_finished", &[("elapsed_ms", &elapsed)]);
     }
 
     pub fn record_stream_intent(&self, pending: Option<StreamAction>) {

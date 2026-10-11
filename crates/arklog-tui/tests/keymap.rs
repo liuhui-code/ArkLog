@@ -1,5 +1,5 @@
-use arklog::{AppCommand, CommandContext, CommandKeymap};
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use arklog::{AppCommand, CommandContext, CommandKeymap, LogTab};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 #[test]
 fn character_commands_require_the_control_modifier() {
@@ -60,4 +60,47 @@ fn editing_and_terminal_copy_shortcuts_are_not_claimed_as_global_commands() {
         CommandKeymap::resolve(macos_copy, CommandContext::HiLog),
         None
     );
+}
+
+#[test]
+fn a_repeated_ctrl_s_does_not_reverse_the_first_stop_or_start() {
+    let press = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+    let mut repeat = press;
+    repeat.kind = KeyEventKind::Repeat;
+
+    assert_eq!(
+        CommandKeymap::resolve(press, CommandContext::HiLog),
+        Some(AppCommand::ToggleStream)
+    );
+    assert_eq!(CommandKeymap::resolve(repeat, CommandContext::HiLog), None);
+}
+
+#[test]
+fn function_keys_select_views_in_every_command_context_without_claiming_modified_keys() {
+    for context in [
+        CommandContext::HiLog,
+        CommandContext::FaultLog,
+        CommandContext::Devices,
+    ] {
+        for (function, tab) in [(1, LogTab::HiLog), (2, LogTab::FaultLog)] {
+            assert_eq!(
+                CommandKeymap::resolve(
+                    KeyEvent::new(KeyCode::F(function), KeyModifiers::NONE),
+                    context
+                ),
+                Some(AppCommand::SelectLogTab(tab))
+            );
+            for modifier in [
+                KeyModifiers::CONTROL,
+                KeyModifiers::ALT,
+                KeyModifiers::SHIFT,
+                KeyModifiers::SUPER,
+            ] {
+                assert_eq!(
+                    CommandKeymap::resolve(KeyEvent::new(KeyCode::F(function), modifier), context),
+                    None
+                );
+            }
+        }
+    }
 }

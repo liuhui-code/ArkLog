@@ -82,6 +82,34 @@ fn records_commands_state_transitions_and_errors_without_poll_noise() {
     fs::remove_file(path).expect("remove test log");
 }
 
+#[test]
+fn records_the_first_frame_after_clear_without_logging_log_content() {
+    let path = temporary_log_path();
+    let log = ExecutionLog::start(&path, 4096).expect("execution log");
+    let diagnostics = RuntimeDiagnostics::new(
+        log,
+        &ConnectionState::Ready,
+        &StreamState::Streaming,
+        &FaultLogState::Idle,
+        1,
+    );
+
+    diagnostics.record_clear_frame_started();
+    diagnostics.record_clear_frame_finished(std::time::Duration::from_millis(12));
+    drop(diagnostics);
+
+    let content = fs::read_to_string(&path).expect("frame diagnostics");
+    fs::remove_file(path).expect("remove test log");
+    let started = content
+        .find("event=clear_frame_started")
+        .expect("frame start");
+    let finished = content
+        .find("event=clear_frame_finished")
+        .expect("frame completion");
+    assert!(started < finished, "{content}");
+    assert!(content.contains("elapsed_ms=\"12\""), "{content}");
+}
+
 fn temporary_log_path() -> PathBuf {
     static NEXT_FILE: AtomicU64 = AtomicU64::new(1);
     let sequence = NEXT_FILE.fetch_add(1, Ordering::Relaxed);

@@ -73,6 +73,12 @@ impl<R: CommandRunner> HdcClient<R> {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
+        if let Some(message) = combined
+            .lines()
+            .find(|line| line.contains("Connect server failed"))
+        {
+            return Err(message.trim().to_string());
+        }
         let devices = parse_hdc_targets(&combined);
         if !output.success && devices.is_empty() {
             let message = combined.trim();

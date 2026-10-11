@@ -116,6 +116,10 @@ impl ArkLogState {
         self.tab
     }
 
+    pub fn select_tab(&mut self, tab: LogTab) {
+        self.tab = tab;
+    }
+
     pub fn next_tab(&mut self) {
         self.tab = match self.tab {
             LogTab::HiLog => LogTab::FaultLog,

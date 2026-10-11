@@ -114,6 +114,17 @@ fn parses_official_verbose_target_fields_and_connection_states() {
     );
 }
 
+#[test]
+fn reports_daemon_failure_even_when_hdc_exits_with_success() {
+    let client = HdcClient::with_runner("hdc", SuccessfulFailureRunner);
+
+    let error = client
+        .list_devices()
+        .expect_err("HDC daemon failure must not appear as an empty device list");
+
+    assert_eq!(error, "Connect server failed");
+}
+
 struct FixtureRunner;
 
 struct OversizedRunner;
@@ -123,6 +134,8 @@ struct DiagnosticRunner;
 struct ConnectedDiagnosticRunner;
 
 struct OfficialVerboseRunner;
+
+struct SuccessfulFailureRunner;
 
 impl CommandRunner for FixtureRunner {
     fn output(&self, program: &str, args: &[String]) -> Result<CommandOutput, String> {
@@ -174,6 +187,16 @@ impl CommandRunner for OfficialVerboseRunner {
         Ok(CommandOutput {
             success: true,
             stdout: b"USB-01 USB Ready Phone hdc-1\n192.0.2.1:8710 TCP Connected Tablet hdc-2\nUSB-03 USB Unauthorized Phone hdc-3\n".to_vec(),
+            stderr: Vec::new(),
+        })
+    }
+}
+
+impl CommandRunner for SuccessfulFailureRunner {
+    fn output(&self, _program: &str, _args: &[String]) -> Result<CommandOutput, String> {
+        Ok(CommandOutput {
+            success: true,
+            stdout: b"Connect server failed\n".to_vec(),
             stderr: Vec::new(),
         })
     }

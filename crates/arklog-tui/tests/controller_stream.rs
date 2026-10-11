@@ -544,19 +544,55 @@ fn quiet_but_healthy_stream_is_not_reconnected() {
         .active_stream_id()
         .expect("stream id")
         .to_string();
-    let deadline = Instant::now() + Duration::from_millis(1_200);
+    let deadline = Instant::now() + Duration::from_millis(6_200);
 
     while Instant::now() < deadline {
         controller.pump_log_batches().expect("pump initial output");
         controller
             .pump_background_tasks()
-            .expect("health check uses process state, not log silence");
+            .expect("device check uses HDC status, not log silence");
         std::thread::sleep(Duration::from_millis(10));
     }
 
     assert_eq!(controller.active_stream_id(), Some(stream_id.as_str()));
     assert_eq!(controller.stream_state(), &arklog::StreamState::Streaming);
     controller.stop_stream().expect("cleanup stream");
+}
+
+#[test]
+fn automatic_discovery_replaces_a_disconnected_stream_even_if_hdc_stays_open() {
+    let devices = vec![DeviceLogDevice {
+        id: "USB-A".to_string(),
+        label: "USB-A".to_string(),
+        status: "online".to_string(),
+        detail: "USB-A Connected".to_string(),
+    }];
+    let mut controller =
+        ArkLogController::new(switching_devices_fixture_path().to_string_lossy(), devices)
+            .expect("controller");
+    controller.start_stream().expect("start A");
+    let old_stream = controller.active_stream_id().expect("A stream").to_string();
+    let deadline = Instant::now() + Duration::from_secs(8);
+
+    while controller
+        .selected_device()
+        .map(|device| device.id.as_str())
+        != Some("USB-B")
+        || controller.active_stream_id().is_none()
+        || controller.active_stream_id() == Some(old_stream.as_str())
+    {
+        assert!(Instant::now() < deadline, "automatic recovery timed out");
+        controller
+            .pump_log_batches_limited(8)
+            .expect("drain batches");
+        controller
+            .pump_background_tasks()
+            .expect("advance recovery");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert_eq!(controller.stream_state(), &arklog::StreamState::Streaming);
+    controller.stop_stream().expect("cleanup replacement");
 }
 
 #[test]

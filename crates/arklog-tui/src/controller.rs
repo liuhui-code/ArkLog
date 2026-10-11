@@ -20,6 +20,7 @@ use stream_sink::ChannelLogSink;
 
 const LOG_CHANNEL_BATCHES: usize = 8;
 const NO_DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const STREAMING_DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const STREAM_START_RETRY_DELAYS: [Duration; 5] = [
     Duration::from_millis(500),
     Duration::from_secs(1),
@@ -663,7 +664,7 @@ fn stream_start_retry_delay(consecutive_failures: usize) -> Duration {
 
 fn device_refresh_interval(stream_state: &StreamState) -> Option<Duration> {
     if stream_state == &StreamState::Streaming {
-        None
+        Some(STREAMING_DEVICE_REFRESH_INTERVAL)
     } else {
         Some(NO_DEVICE_REFRESH_INTERVAL)
     }
@@ -713,12 +714,15 @@ mod tests {
     }
 
     #[test]
-    fn discovery_runs_while_waiting_but_not_during_a_healthy_stream() {
+    fn discovery_runs_frequently_while_waiting_and_slowly_during_a_healthy_stream() {
         assert_eq!(
             device_refresh_interval(&StreamState::Stopped),
             Some(Duration::from_secs(1))
         );
-        assert_eq!(device_refresh_interval(&StreamState::Streaming), None);
+        assert_eq!(
+            device_refresh_interval(&StreamState::Streaming),
+            Some(Duration::from_secs(5))
+        );
     }
 
     #[test]

@@ -53,6 +53,10 @@ fn minimum_width_hilog_view_maximizes_log_workspace_without_a_footer() {
     assert!(rendered.contains("live log"));
     assert!(rendered.contains("HiLog"));
     assert!(rendered.contains("Fault Log"));
+    assert!(
+        rendered.contains("F1/F2"),
+        "view shortcuts must remain visible at 72 columns"
+    );
     assert!(rendered.contains("REGEX FILTER"));
     assert!(rendered.contains("● LIVE"));
     assert!(!rendered.contains("VISIBLE  │  FIND"));

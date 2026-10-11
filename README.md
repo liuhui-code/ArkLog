@@ -7,12 +7,12 @@ macOS Terminal/iTerm2，不再依赖浏览器窗口承载实时日志。
 ## 当前能力
 
 - 通过 `hdc list targets -v` 发现设备，使用 `Ctrl+D` 查看和刷新完整连接列表
-- 通过 `hdc -t <device> hilog` 启停 HiLog；Running/Stopped 意图由 Controller 持久保存，设备短暂离线或 HDC 故障不会取消自动恢复；健康流期间不并发轮询设备，避免安静日志流被探测超时打断
+- 通过 `hdc -t <device> hilog` 启停 HiLog；Running/Stopped 意图由 Controller 持久保存，设备短暂离线或 HDC 故障不会取消自动恢复；等待设备时约每秒发现一次，采集中约每五秒核对设备列表，不以日志安静作为掉线信号
 - 使用最多 50 行/首条后 100 ms 等待预算的批次和固定 8 批次通道传输，拥塞时背压而不丢行（100 ms 不是端到端硬 SLA）
 - 通过单一、不区分大小写的正则表达式过滤并高亮全部非空命中，正则源和编译内存都有硬上限
 - 使用 `Ctrl+F` 做不区分大小写的视图内字面量查找，支持循环定位和命中高亮
 - 滚动离开末尾后固定当前锚点，按 `Ctrl+G` 回到最新并恢复自动跟随
-- HiLog/Fault Log 共用工作区，通过 `Tab` 切换；Fault Log 可刷新和浏览原始诊断
+- HiLog/Fault Log 共用工作区，通过 `F1`/`F2` 直接选择；普通浏览时也支持 `Tab`/`Shift+Tab` 切换，Fault Log 可刷新和浏览原始诊断
 - 顶部设备、日志视图、过滤/查找和流状态共用一行紧凑控制区；没有底部状态栏，HiLog 使用完整工作区宽度
 - HDC 查询带超时与输出上限，设备刷新、Fault Log 查询和停流均不阻塞界面线程
 - `Clear` 不停止日志流，只开启一个新的空会话
@@ -58,7 +58,8 @@ cargo run -p arklog --release
 
 ## 键盘操作
 
-- `Tab`：切换 HiLog/Fault Log
+- `F1` / `F2`：直接打开 HiLog / Fault Log；在过滤、查找或设备列表中也可使用，未应用的输入草稿不会自动提交
+- `Tab` / `Shift+Tab`：普通浏览时切换 HiLog/Fault Log；Windows Terminal 的 `Ctrl+Tab` / `Ctrl+Shift+Tab` 切换的是终端自身标签页
 - `Ctrl+D`：打开/关闭设备连接列表
 - `Ctrl+S`：启动/停止 HiLog；刷新或启停过渡期间再次按下可取消/反转待执行操作
 - `Ctrl+R`：刷新设备连接列表或当前 Fault Log

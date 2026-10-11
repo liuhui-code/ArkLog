@@ -1,8 +1,11 @@
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+use crate::LogTab;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AppCommand {
     Quit,
+    SelectLogTab(LogTab),
     ToggleStream,
     Refresh,
     ToggleDevices,
@@ -25,6 +28,13 @@ pub struct CommandKeymap;
 
 impl CommandKeymap {
     pub fn resolve(key: KeyEvent, context: CommandContext) -> Option<AppCommand> {
+        if key.modifiers.is_empty() {
+            match key.code {
+                KeyCode::F(1) => return Some(AppCommand::SelectLogTab(LogTab::HiLog)),
+                KeyCode::F(2) => return Some(AppCommand::SelectLogTab(LogTab::FaultLog)),
+                _ => {}
+            }
+        }
         if !key.modifiers.contains(KeyModifiers::CONTROL) {
             return None;
         }
@@ -44,6 +54,9 @@ impl CommandKeymap {
             'l' => Some(AppCommand::Clear),
             _ => None,
         }?;
+        if key.kind == KeyEventKind::Repeat && command == AppCommand::ToggleStream {
+            return None;
+        }
         let hilog_only = matches!(
             command,
             AppCommand::EditFilter

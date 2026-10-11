@@ -176,7 +176,7 @@ fn render_header(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
             .select(usize::from(view.tab == LogTab::FaultLog))
             .divider("│")
             .highlight_style(theme::selected_tab())
-            .block(theme::panel(" LOG VIEWS ")),
+            .block(theme::panel(" LOG VIEWS · F1/F2 ")),
         tabs,
     );
     render_query(frame, query, view);

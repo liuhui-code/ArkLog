@@ -30,6 +30,11 @@ content that ArkLog exists to display.
    existing status area but does not prevent ArkLog from running.
 7. After restoring the terminal on exit, ArkLog prints the execution-log path
    so the user can attach it to an issue report.
+8. Clear records `clear_finished` with its result and elapsed milliseconds.
+   The first subsequent redraw records `clear_frame_started` before terminal
+   sizing, session-window reads, and drawing, then `clear_frame_finished` with
+   elapsed milliseconds after drawing returns. These events distinguish Clear
+   execution from the following redraw without adding events to idle polls.
 
 ## Object boundaries
 
@@ -47,3 +52,7 @@ content that ArkLog exists to display.
   per physical line.
 - Existing lossless-stream and memory tests prove diagnostics do not change
   HiLog delivery, ordering, or the 50 MiB process budget.
+- The real Ctrl+L dispatch test checks Clear completion and excludes HiLog
+  content from diagnostics. Public diagnostics tests check frame-event ordering
+  and timing fields. These tests do not reproduce a native Windows console
+  freeze; its execution trace is still required to locate the blocked call.
