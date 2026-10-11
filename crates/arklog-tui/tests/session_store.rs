@@ -144,6 +144,19 @@ fn find_index_rebuilds_after_filter_changes_and_indexes_later_lines() {
 }
 
 #[test]
+fn find_index_uses_original_text_unicode_case_matching() {
+    let mut store = SessionLogStore::new().expect("session store");
+    store
+        .append_lines(["long ſ character", "plain"])
+        .expect("lines");
+
+    store.set_find("S").expect("unicode case-insensitive find");
+
+    assert_eq!(store.find_count(), 1);
+    assert_eq!(store.find_visible_index(0).expect("match"), Some(0));
+}
+
+#[test]
 fn query_rebuilds_scan_raw_logs_once_and_find_only_scans_visible_records() {
     let mut store = SessionLogStore::new().expect("session store");
     store

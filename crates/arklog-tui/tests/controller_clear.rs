@@ -22,7 +22,7 @@ fn clear_keeps_the_same_live_stream_and_displays_logs_sent_after_clear() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(controller.state().raw_count(), 1);
-    controller.state_mut().scroll_up(1, 1);
+    controller.state_mut().scroll_up(1, 1).expect("scroll");
     controller.state_mut().set_find("before").expect("find");
 
     controller.state_mut().clear().expect("clear live session");

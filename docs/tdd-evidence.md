@@ -569,3 +569,21 @@ Verification: focused Clear/key-dispatch/diagnostics tests, `pnpm test`,
 `pnpm build`, `cargo test --workspace`, `cargo check -p arklog`, Windows MSVC
 test compilation, `cargo fmt --all --check`, and `git diff --check` passed.
 The Windows check compiles tests; it does not run a Windows terminal session.
+
+## v0.2.8 release integration (2026-10-11)
+
+Integrated all local changes with the v0.2.7 remote main branch, preserving
+long-line navigation, soft wrap, query history, device phone codes, and the
+post-disconnect retry path. Conflict resolution keeps both the phone-code and
+successful-exit daemon-failure discovery regressions, plus both navigation
+keymap suites. Focused discovery, terminal dispatch, Clear, diagnostics, and
+stream-controller tests pass on the combined code.
+
+RED: `release_package_version_is_v0_2_8` failed with package version 0.2.7
+before editing package metadata. GREEN: the complete release-workflow test
+passes after setting the package.json, Rust package, and lockfile to 0.2.8.
+
+Final local verification: `pnpm test`, `pnpm build`, `cargo test --workspace`,
+`cargo check -p arklog`, Windows MSVC test compilation, `cargo fmt --all
+--check`, and `git diff --check` pass. `pnpm memory:check` passes with 100,000
+lines and peak RSS 13,279,232 bytes below the 52,428,800-byte budget.
