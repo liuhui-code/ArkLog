@@ -82,6 +82,26 @@ fn connection_refresh_does_not_reflow_navigation_slots() {
     assert_eq!(ready_tabs, refreshing_tabs);
 }
 
+#[test]
+fn automatic_device_refresh_never_replaces_the_applied_regex() {
+    let ready = render_connected_header("Devices ready");
+    let expected_header = ready.lines().take(3).collect::<Vec<_>>().join("\n");
+    for status in [
+        "Devices ready",
+        "Refreshing devices",
+        "Devices ready",
+        "Refreshing devices",
+        "Devices ready",
+    ] {
+        let rendered = render_connected_header(status);
+        let header = rendered.lines().take(3).collect::<Vec<_>>().join("\n");
+        assert!(header.contains("REGEX FILTER"), "{status}:\n{rendered}");
+        assert!(header.contains("ArkUI|Ability"), "{status}:\n{rendered}");
+        assert!(!header.contains(" CONNECTION "), "{status}:\n{rendered}");
+        assert_eq!(header, expected_header, "{status}");
+    }
+}
+
 fn render_connected_header(connection_status: &str) -> String {
     let backend = TestBackend::new(110, 20);
     let mut terminal = Terminal::new(backend).expect("terminal");
@@ -104,7 +124,7 @@ fn render_connected_header(connection_status: &str) -> String {
                     raw_count: 0,
                     visible_count: 0,
                     following_latest: true,
-                    filter_query: "",
+                    filter_query: "ArkUI|Ability",
                     active_filter: None,
                     filter_error: None,
                     find_query: "",

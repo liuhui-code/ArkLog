@@ -54,5 +54,7 @@ content that ArkLog exists to display.
   HiLog delivery, ordering, or the 50 MiB process budget.
 - The real Ctrl+L dispatch test checks Clear completion and excludes HiLog
   content from diagnostics. Public diagnostics tests check frame-event ordering
-  and timing fields. These tests do not reproduce a native Windows console
-  freeze; its execution trace is still required to locate the blocked call.
+  and timing fields. Windows binary regressions additionally verify that a
+  running session disables Quick Edit and restores console input mode after
+  normal exit or failed initialization. Native desktop mouse-selection
+  reproduction and before/after evidence are recorded in `docs/tdd-evidence.md`.

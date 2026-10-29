@@ -16,6 +16,8 @@ use ratatui::{
 
 mod system_clipboard;
 use system_clipboard::SystemClipboard;
+#[cfg(windows)]
+mod windows_console;
 
 const MAX_LOG_BATCHES_PER_TICK: usize = 8;
 #[cfg(windows)]
@@ -47,6 +49,8 @@ fn main() -> io::Result<()> {
         .into_iter()
         .flatten()
         .reduce(|left, right| format!("{left}; {right}"));
+    #[cfg(windows)]
+    let _console_mode = windows_console::ConsoleModeGuard::new()?;
     let mut terminal = ratatui::try_init()?;
     let result = TerminalApp::new(controller, startup_error, execution_log).run(&mut terminal);
     ratatui::try_restore()?;

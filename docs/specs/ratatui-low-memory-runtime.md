@@ -18,7 +18,10 @@ without bound.
    in-view find, scrolling, clear, and follow-latest controls.
 2. The same Crossterm application runs in Windows Terminal/PowerShell and
    macOS Terminal/iTerm2. Terminal state is restored after normal exit or an
-   application error.
+   application error. A Windows terminal session disables console Quick Edit
+   before initialization, preventing accidental text selection from suspending
+   console I/O and all keyboard commands. The previous input mode is restored
+   after terminal teardown, including initialization and runtime error exits.
 3. HiLog starts for the selected online device and every complete source line
    remains available, in source order, until clear, stream replacement, or
    process exit.
@@ -64,6 +67,8 @@ without bound.
     `LIVE` with its real inactive error state after committing its final batch.
 16. The terminal redraws only after state, input, terminal size, or visible log
     data changes. Each event-loop tick consumes at most eight log batches.
+    Routine device refresh does not replace the applied regex field with a
+    connection message or make the top controls flicker.
 17. A filter change scans raw records once while rebuilding filter and find
     indexes together. A find-only change evaluates visible records without
     re-running the regex. Unchanged queries perform no rebuild.

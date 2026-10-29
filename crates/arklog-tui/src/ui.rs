@@ -245,7 +245,8 @@ fn render_query(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
             ),
             InputMode::Normal
                 if view.connection_status != "Devices ready"
-                    && view.connection_status != "No devices" =>
+                    && view.connection_status != "No devices"
+                    && view.connection_status != "Refreshing devices" =>
             {
                 (" CONNECTION ", view.connection_status, theme::Tone::Error)
             }

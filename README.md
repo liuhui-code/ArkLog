@@ -86,6 +86,9 @@ cargo run -p arklog --release
 
 日志正文的鼠标选择和复制仍由终端处理：macOS 使用 `⌘C`，Windows Terminal
 通常使用 `Ctrl+Shift+C`。`Ctrl+C` 不再作为 ArkLog 的退出键。
+Windows 经典控制台运行期间会关闭 Quick Edit，避免鼠标误选文本后暂停控制台 I/O、
+导致全部快捷键失去响应；退出时恢复启动前的控制台输入设置。需要鼠标选区复制时，
+建议使用 Windows Terminal。
 
 普通单字符不会触发命令；在正则和查找输入框中可直接输入文本。
 

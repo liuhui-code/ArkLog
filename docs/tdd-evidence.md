@@ -587,3 +587,69 @@ Final local verification: `pnpm test`, `pnpm build`, `cargo test --workspace`,
 `cargo check -p arklog`, Windows MSVC test compilation, `cargo fmt --all
 --check`, and `git diff --check` pass. `pnpm memory:check` passes with 100,000
 lines and peak RSS 13,279,232 bytes below the 52,428,800-byte budget.
+
+## Native Windows console selection freeze (2026-10-30)
+
+Reproduced over `ssh windows-pc` on Windows 10 build 19045, including the
+logged-in desktop session with a real mouse drag in a dedicated console.
+The unmodified v0.2.8 binary retains input mode `0x1f0` after entering raw
+mode: Quick Edit is still enabled. Selecting text suspends console I/O, so
+Ctrl+L, Ctrl+D, and Ctrl+Q appear completely unresponsive. Escape cancels the
+host selection, immediately releasing the queued application commands.
+This reproduces independently of HDC or device log throughput.
+
+RED through the actual Windows executable, before changing production code:
+
+- `native_console_keeps_shortcuts_responsive_and_restores_quick_edit` fails
+  because the running console still has `ENABLE_QUICK_EDIT_MODE` (`0x40`).
+- `failed_terminal_initialization_restores_console_input_mode` fails after
+  closing the terminal output pipe: the original binary leaves input mode
+  `496` instead of the original `503`.
+
+GREEN: a Windows-only session guard saves input mode before Ratatui
+initialization, disables Quick Edit with `ENABLE_EXTENDED_FLAGS`, and restores
+the original input mode after teardown or an error. Both native binary
+regressions pass in isolated consoles, including headless SSH execution.
+The interaction regression injects real console key records, waits for Clear's
+completed frame, checks the device command, quits, and checks restoration.
+
+Desktop differential loop on the same Windows machine, using the same real
+mouse drag and Ctrl+L/D/Q sequence: the original freezes 3/3 times and resumes
+only after Escape; the fixed release freezes 0/10 times and exits normally.
+The running fixed input mode is `0x1b0`, differing only by the Quick Edit bit.
+Classic-console automatic drag selection is disabled during ArkLog; Windows
+Terminal remains the recommended host for mouse selection and copying.
+
+Final verification on both macOS and native Windows: `pnpm test`, `pnpm build`,
+`cargo test --workspace`, and `cargo check -p arklog` pass. The complete Rust
+workspace tests and checks pass again after adding the initialization-error
+regression. `cargo fmt --all --check` and `git diff --check` pass.
+
+## Regex field stability during device refresh (2026-10-30)
+
+RED: `automatic_device_refresh_never_replaces_the_applied_regex` renders the
+public UI through repeated ready/refreshing cycles. On the original code,
+`Refreshing devices` replaces both the regex title and the applied expression
+with a red connection message, even while the selected device remains online
+and HiLog is streaming.
+
+GREEN: routine refreshing is treated as a normal connection state when
+rendering the query field. The regression checks that the applied expression
+and complete top controls remain identical across repeated refresh cycles.
+Existing connection-failure, action-error, input-editing, and stream-status
+rendering tests also pass.
+
+Verification on macOS and native Windows: focused rendering regressions,
+`pnpm test`, `pnpm build`, `cargo test --workspace`, and `cargo check -p arklog`.
+The Windows executable includes both this fix and the console-freeze fix above.
+
+## v0.2.9 release (2026-10-30)
+
+RED: `release_package_version_is_v0_2_9` fails against the existing 0.2.8
+metadata. GREEN: the release-workflow suite passes after updating the Rust
+package, Cargo lockfile, and package.json to 0.2.9.
+
+The release includes the Windows console-freeze and regex-refresh fixes above.
+Release validation runs `pnpm test`, `pnpm build`, `cargo test --workspace`,
+`cargo check -p arklog`, and `pnpm memory:check` on macOS and native Windows,
+followed by the existing three-platform GitHub Actions release workflow.
