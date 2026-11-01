@@ -104,7 +104,7 @@ impl DeviceLogRuntime {
         let mut command = Command::new(&self.executable);
         configure_hidden_command(&mut command);
         let mut child = command
-            .args(["-t", device_id, "hilog"])
+            .args(["-t", device_id, "hilog", "-v", "epoch"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

@@ -612,6 +612,12 @@ fn log_level_field(raw: &str) -> Option<(std::ops::Range<usize>, theme::LogLevel
         && fields[standard_start + 3].1.parse::<u64>().is_ok()
     {
         fields.get(standard_start + 4)
+    } else if fields.len() >= 4
+        && crate::agent_query::parse_epoch_millis(fields[0].1).is_some()
+        && fields[1].1.parse::<u64>().is_ok()
+        && fields[2].1.parse::<u64>().is_ok()
+    {
+        fields.get(3)
     } else if fields
         .first()
         .is_some_and(|(_, field)| field.parse::<u64>().is_ok())

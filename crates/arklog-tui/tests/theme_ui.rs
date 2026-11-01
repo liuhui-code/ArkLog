@@ -224,3 +224,23 @@ fn presentation_modules_consume_semantic_tokens_instead_of_owning_design_values(
         }
     }
 }
+
+#[test]
+fn epoch_hilog_colors_only_the_parsed_level() {
+    let line = "1793527201.001 120 120 E ArkUI/App error shown";
+    let terminal = render_hilog(&[line.to_string()], None, "", None);
+    let buffer = terminal.backend().buffer();
+    let start = cell_index(buffer, line);
+    let level = line.find(" E ").unwrap() + 1;
+    for offset in 0..line.len() {
+        assert_eq!(
+            buffer.content()[start + offset].fg,
+            if offset == level {
+                Color::Rgb(243, 139, 168)
+            } else {
+                Color::Rgb(205, 214, 244)
+            },
+            "offset {offset}"
+        );
+    }
+}

@@ -1,5 +1,5 @@
 #!/bin/sh
-printf '%s\n' "$1 $2 $3"
+printf '%s\n' "$*"
 if [ "$2" = "EXIT-01" ]; then
   printf 'last-before-exit\n'
   exit 7

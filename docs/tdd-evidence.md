@@ -653,3 +653,68 @@ The release includes the Windows console-freeze and regex-refresh fixes above.
 Release validation runs `pnpm test`, `pnpm build`, `cargo test --workspace`,
 `cargo check -p arklog`, and `pnpm memory:check` on macOS and native Windows,
 followed by the existing three-platform GitHub Actions release workflow.
+
+## AI Agent MCP queries
+
+Specification: `docs/specs/agent-log-query.md`.
+
+RED → GREEN vertical slices:
+
+- `cargo test -p arklog --test agent_query`: missing `LogQuery` / snapshot API;
+  added raw-session snapshots and inclusive device-time + regex queries.
+- Pagination test: missing cursor/session/until fields; added fixed-boundary
+  pages, independent readers and shared directory lifetime across Clear.
+- `cargo test -p arklog --test mcp`: missing stdio entry, then missing runtime;
+  added negotiation/discovery and bounded loopback query integration.
+- Binary MCP test: attempted terminal initialization; added the early `--mcp`
+  path and the opt-in runtime hook in the TUI loop.
+- Sparse query test: scanned through the entire 12 MB history; added scan-byte
+  and time budgets with resumable raw cursors.
+- Invalid initialization test: accepted missing protocol parameters; added
+  initialization parameter validation.
+- Binary configuration test: accepted port 0, leaving no connectable configured
+  endpoint; reject configured ports outside 1–65535 before starting.
+
+Focused GREEN: `cargo test -p arklog --test agent_query --test mcp`.
+Loopback integration tests require permission to bind a local ephemeral port.
+
+Final verification (macOS, 2026-11-01): `pnpm test`, `pnpm build`,
+`cargo test --workspace` (164 passing tests), `cargo check -p arklog`,
+`cargo fmt --all --check`, and `git diff --check` passed. The release
+`pnpm memory:check` passed with 100,000 records and 13,103,104 bytes peak RSS
+against the 52,428,800-byte budget. A real pseudo-terminal TUI + fake-HDC smoke
+queried `first` through the binary's MCP stdio adapter, reported device USB-01
+and two raw records, then exited cleanly with Ctrl+Q.
+
+## Optional Unix timestamps and boolean MCP query
+
+RED → GREEN vertical slices:
+
+- Existence test: missing `LogExistsQuery` / `has_logs`; added complete-snapshot
+  boolean scans that resume beyond the 100,000-record page boundary.
+- Time query test: integer `start`/`end` did not compile with the string API;
+  changed both to optional signed Unix millisecond integers and parsed device
+  epoch seconds using exact integer arithmetic.
+- Strict-after test: missing `after`; added optional millisecond `after` with
+  an exclusive lower bound, while ordinary query bounds stay inclusive.
+- Fake-HDC runtime test: captured `hilog` without format arguments; changed the
+  command to `hilog -v epoch` so timestamps need no guessed year/timezone.
+- MCP discovery test: only two tools and string time schemas; added optional
+  integer time schemas and the `arklog_has_logs` boolean output schema.
+- MCP integration test: runtime rejected the new tool; connected it to the
+  snapshot existence query, including true/false, omitted time and validation.
+- Epoch render test: Level was neutral; taught field parsing the epoch prefix
+  while leaving every other field neutral.
+
+Focused verification: `cargo test -p arklog --test agent_query --test mcp
+--test theme_ui --test controller_stream` and the core runtime test.
+
+Final follow-up verification (macOS, 2026-11-01): `pnpm test` and
+`cargo test --workspace` each passed all 169 tests; `pnpm build`,
+`cargo check -p arklog`, formatting and diff checks passed. One earlier broad
+run hit the existing 3-second background-reap timeout; its isolated rerun and
+both final full runs passed without changing that test's timing policy.
+`pnpm memory:check` passed 100,000 records at 12,992,512 bytes peak RSS
+against the 52,428,800-byte budget. A real pseudo-terminal TUI + epoch fake-HDC
+smoke verified inclusive millisecond range queries, strict-after true/false,
+regex-only queries without time, and a clean Ctrl+Q exit.

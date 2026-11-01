@@ -32,7 +32,7 @@ fn streams_real_hdc_output_through_the_bounded_controller_channel() {
             .state_mut()
             .visible_window(10)
             .expect("visible output"),
-        ["-t USB-01 hilog", "first", "second"]
+        ["-t USB-01 hilog -v epoch", "first", "second"]
     );
     controller.stop_stream().expect("stop stream");
     assert!(!controller.is_streaming());

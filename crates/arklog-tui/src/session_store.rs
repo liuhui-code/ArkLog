@@ -2,6 +2,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use regex::{Regex, RegexBuilder};
 
@@ -16,8 +17,16 @@ pub struct QueryRebuildWork {
     pub visible_records_scanned: u64,
 }
 
+pub(crate) struct SessionDirectory(pub(crate) PathBuf);
+
+impl Drop for SessionDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 pub struct SessionLogStore {
-    directory: PathBuf,
+    directory: Arc<SessionDirectory>,
     data_writer: Option<BufWriter<File>>,
     data_reader: Option<File>,
     raw_index_writer: Option<BufWriter<File>>,
@@ -46,7 +55,7 @@ impl SessionLogStore {
             create_file_pair(directory.join("visible.idx"))?;
         let (find_index_writer, find_index_reader) = create_file_pair(directory.join("find.idx"))?;
         Ok(Self {
-            directory,
+            directory: Arc::new(SessionDirectory(directory)),
             data_writer: Some(data_writer),
             data_reader: Some(data_reader),
             raw_index_writer: Some(raw_index_writer),
@@ -76,6 +85,16 @@ impl SessionLogStore {
             self.append_line(line.as_ref())?;
         }
         Ok(())
+    }
+
+    pub fn query_snapshot(&mut self) -> io::Result<crate::LogSnapshot> {
+        self.flush()?;
+        Ok(crate::LogSnapshot {
+            data: File::open(self.directory.0.join("raw.log"))?,
+            index: File::open(self.directory.0.join("raw.idx"))?,
+            raw_count: self.raw_count,
+            directory: Arc::clone(&self.directory),
+        })
     }
 
     pub fn raw_count(&self) -> u64 {
@@ -214,7 +233,7 @@ impl SessionLogStore {
 
     pub fn retained_heap_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
-            + self.directory.to_string_lossy().len()
+            + self.directory.0.to_string_lossy().len()
             + self.find_query.capacity()
             + self.filter.as_ref().map_or(0, |_| REGEX_COMPILED_LIMIT)
             + self.find.as_ref().map_or(0, |_| FIND_COMPILED_LIMIT)
@@ -417,7 +436,6 @@ impl Drop for SessionLogStore {
         drop(self.visible_index_reader.take());
         drop(self.find_index_writer.take());
         drop(self.find_index_reader.take());
-        let _ = fs::remove_dir_all(&self.directory);
     }
 }
 

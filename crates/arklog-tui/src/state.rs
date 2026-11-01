@@ -72,6 +72,10 @@ impl ArkLogState {
         self.store.append_lines(lines)
     }
 
+    pub fn query_snapshot(&mut self) -> io::Result<crate::LogSnapshot> {
+        self.store.query_snapshot()
+    }
+
     pub fn visible_window(&mut self, height: usize) -> io::Result<Vec<String>> {
         let start = self.window_start(height);
         self.store.visible_window(start, height)

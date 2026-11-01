@@ -4,10 +4,10 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use arklog::{
-    app_layout, render_app, run_memory_probe, ActionStatus, AppCommand, AppView, ArkLogController,
-    CommandContext, CommandKeymap, ExecutionLog, InputMode, LogTab, NavigationAction,
-    NavigationContext, NavigationKeymap, OverlayMode, RuntimeDiagnostics, TextInput,
-    EXECUTION_LOG_MAX_BYTES, MEMORY_BUDGET_BYTES,
+    app_layout, render_app, run_memory_probe, serve_mcp, ActionStatus, AppCommand, AppView,
+    ArkLogController, CommandContext, CommandKeymap, ExecutionLog, InputMode, LogTab, McpRuntime,
+    NavigationAction, NavigationContext, NavigationKeymap, OverlayMode, RuntimeDiagnostics,
+    TextInput, DEFAULT_MCP_PORT, EXECUTION_LOG_MAX_BYTES, MEMORY_BUDGET_BYTES,
 };
 use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
@@ -26,12 +26,17 @@ const WINDOWS_TERMINAL_CHILD_ARG: &str = "--windows-terminal-child";
 const WINDOWS_TERMINAL_ARG: &str = "--windows-terminal";
 
 fn main() -> io::Result<()> {
+    if env::args().nth(1).as_deref() == Some("--mcp") {
+        let port = configured_mcp_port()?.unwrap_or(DEFAULT_MCP_PORT);
+        return serve_mcp(io::stdin().lock(), io::stdout().lock(), port);
+    }
     if env::args().nth(1).as_deref() == Some("--memory-probe") {
         return run_memory_budget_probe();
     }
     if relaunch_standalone_windows_console() {
         return Ok(());
     }
+    let mcp_runtime = configured_mcp_port()?.map(McpRuntime::start).transpose()?;
     let executable = env::var("ARKLOG_HDC_PATH")
         .or_else(|_| env::var("ARKLOG_HDC"))
         .unwrap_or_else(|_| "hdc".to_string());
@@ -52,12 +57,31 @@ fn main() -> io::Result<()> {
     #[cfg(windows)]
     let _console_mode = windows_console::ConsoleModeGuard::new()?;
     let mut terminal = ratatui::try_init()?;
-    let result = TerminalApp::new(controller, startup_error, execution_log).run(&mut terminal);
+    let result = TerminalApp::new(controller, startup_error, execution_log)
+        .run(&mut terminal, mcp_runtime.as_ref());
     ratatui::try_restore()?;
     if execution_log_enabled {
         eprintln!("ArkLog execution log: {}", execution_log_path.display());
     }
     result
+}
+
+fn configured_mcp_port() -> io::Result<Option<u16>> {
+    env::var("ARKLOG_MCP_PORT")
+        .ok()
+        .map(|port| {
+            let port = port
+                .parse::<u16>()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+            if port == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "ARKLOG_MCP_PORT must be between 1 and 65535",
+                ));
+            }
+            Ok(port)
+        })
+        .transpose()
 }
 
 #[cfg(any(windows, test))]
@@ -216,7 +240,7 @@ impl TerminalApp {
         }
     }
 
-    fn run(mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+    fn run(mut self, terminal: &mut DefaultTerminal, mcp: Option<&McpRuntime>) -> io::Result<()> {
         let mut redraw = RedrawState::new();
         while !self.should_quit {
             match self
@@ -235,6 +259,9 @@ impl TerminalApp {
                     self.record_background_error(error);
                     redraw.mark();
                 }
+            }
+            if let Some(mcp) = mcp {
+                mcp.pump(&mut self.controller);
             }
             self.observe_runtime();
             if redraw.take() {

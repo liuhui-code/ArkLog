@@ -19,7 +19,7 @@ fn starts_hilog_for_the_selected_device_and_stops_it() {
     assert_eq!(stream.status, "running");
     assert_eq!(
         sink.wait_for_lines(3),
-        ["-t USB-01 hilog", "first", "second"]
+        ["-t USB-01 hilog -v epoch", "first", "second"]
     );
     runtime.stop_stream(&stream.stream_id).expect("stop stream");
 }

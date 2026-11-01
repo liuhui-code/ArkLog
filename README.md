@@ -7,7 +7,7 @@ macOS Terminal/iTerm2，不再依赖浏览器窗口承载实时日志。
 ## 当前能力
 
 - 通过 `hdc list targets -v` 发现设备，使用 `Ctrl+D` 查看和刷新完整连接列表；对在线设备按需读取 `/version/special_cust`，并以“手机代号 设备 ID”显示，读取失败时保留原 ID
-- 通过 `hdc -t <device> hilog` 启停 HiLog；Running/Stopped 意图由 Controller 持久保存，设备短暂离线或 HDC 故障不会取消自动恢复；等待设备时约每秒发现一次，采集中约每五秒核对设备列表，不以日志安静作为掉线信号
+- 通过 `hdc -t <device> hilog -v epoch` 启停 HiLog；Running/Stopped 意图由 Controller 持久保存，设备短暂离线或 HDC 故障不会取消自动恢复；等待设备时约每秒发现一次，采集中约每五秒核对设备列表，不以日志安静作为掉线信号
 - 使用最多 50 行/首条后 100 ms 等待预算的批次和固定 8 批次通道传输，拥塞时背压而不丢行（100 ms 不是端到端硬 SLA）
 - 通过单一、不区分大小写的正则表达式过滤并高亮全部非空命中，正则源和编译内存都有硬上限
 - 使用 `Ctrl+F` 做不区分大小写的视图内字面量查找，支持循环定位和命中高亮
@@ -19,6 +19,7 @@ macOS Terminal/iTerm2，不再依赖浏览器窗口承载实时日志。
 - 顶部设备、日志视图、过滤/查找和流状态共用一行紧凑控制区；没有底部状态栏，HiLog 使用完整工作区宽度
 - HDC 查询带超时与输出上限，设备刷新、Fault Log 查询和停流均不阻塞界面线程
 - `Clear` 不停止日志流，只开启一个新的空会话
+- 可选 MCP 只读工具，让 AI Agent 查询运行中会话的 HiLog，支持时间范围、正则和分页
 - 不使用 SQLite，不跨启动保留 HiLog
 - 完整 HiLog 写入进程生命周期临时文件；内存只保留有界批次、索引状态和当前视窗
 - release 压力探针对 100,000 行执行 50 MiB RSS 硬门禁
@@ -58,6 +59,94 @@ Windows PowerShell：
 $env:ARKLOG_HDC_PATH = "C:\path\to\hdc.exe"
 cargo run -p arklog --release
 ```
+
+## AI Agent / MCP 查询
+
+先开启运行中 TUI 的本机查询通道（默认不开启）：
+
+```bash
+ARKLOG_MCP_PORT=38765 cargo run -p arklog --release
+```
+
+Windows PowerShell：
+
+```powershell
+$env:ARKLOG_MCP_PORT = "38765"
+.\ArkLog-windows-x86_64.exe
+```
+
+然后在 AI Agent 的 MCP 配置中注册同一个 ArkLog 可执行文件。以下为常见的
+`mcpServers` JSON 格式；将 `command` 替换成已构建二进制的绝对路径：
+
+```json
+{
+  "mcpServers": {
+    "arklog": {
+      "command": "/absolute/path/to/arklog",
+      "args": ["--mcp"],
+      "env": { "ARKLOG_MCP_PORT": "38765" }
+    }
+  }
+}
+```
+
+`--mcp` 通过标准输入/输出提供 MCP，不启动另一个 TUI 或 HDC。它连接已经运行的
+ArkLog；两端端口必须相同，适配器未设置端口时使用 `38765`。多个 TUI 可分别选择
+不同端口（`1`–`65535`）；端口被占用时启动明确失败。通道只监听 `127.0.0.1`，开启后
+本机进程可读取当前日志。关闭 TUI 即关闭查询通道。
+
+提供三个只读工具：
+
+- `arklog_session`：当前会话标识、设备 ID 和原始记录数。
+- `arklog_query_logs`：查询完整原始 HiLog，不受界面正则或 Find 影响；时间可省略。
+- `arklog_has_logs`：判断指定时间戳之后是否存在匹配正则的日志，返回 `{"exists": true/false}`。
+
+`arklog_query_logs` 参数示例：
+
+```json
+{
+  "start": 1793527200000,
+  "end": 1793527500000,
+  "regex": "error|timeout|失败",
+  "limit": 100
+}
+```
+
+`arklog_query_logs` 的所有参数均可省略；只传 `regex` 即可查询整个当前会话。
+`start` / `end` 使用 **Unix 毫秒整数**，起止边界均包含，也可只传其中一个。
+采集命令使用 `hilog -v epoch`，原始日志中的 `1793527200.001` 表示 Unix 秒，
+查询时准确转换为 `1793527200001` 毫秒；无需推断年份或时区，可跨年查询。
+带时间条件时跳过无法解析时间的记录，省略时间则保留这些记录。
+正则默认不区分大小写，使用 Rust regex 语法，不支持回溯引用或环视；错误表达式、
+非整数时间和失效游标作为 MCP 工具错误返回。
+
+`arklog_has_logs` 参数示例：
+
+```json
+{
+  "after": 1793527200000,
+  "regex": "error|timeout|失败"
+}
+```
+
+其中 `regex` 必传，`after` 可省略；省略时检查整个当前会话。传入 `after` 时，只判断
+日志时间戳 **严格大于** 该毫秒值的记录。结果是 `{"exists": true}` 或
+`{"exists": false}`，不返回日志正文。工具检查请求时的固定快照，不等待后续新日志；
+会继续扫描后续分页，确认查完才返回 `false`。扫描超过约 5 秒仍未得出结论或发生
+读取错误时返回工具错误，不把未完成的查询当成 `false`。
+
+`arklog_query_logs` 的结果含 `session_id`、`device_id`、`raw_count`、`until`、`records` 和 `next_cursor`；
+每条记录含从 `0` 开始的原始 `index` 和完整 `text`。按采集顺序返回，默认每页 100 条，
+最多 1000 条。继续查询时保留原筛选条件，将返回的 `next_cursor` 作为 `cursor`，并携带
+第一页的 `session_id` 和 `until`，即可固定查询边界，不混入后续追加的日志。
+`next_cursor` 为 `null` 表示结束；空页也可能带继续游标。
+
+扫描在后台线程执行，每页最多扫描 100,000 条或约 8 MiB，扫描循环每条记录之间检查
+250 ms 时间预算；返回正文最多 256 KiB。不会截断原始记录；单条命中记录超过返回预算
+或单条原始记录超过 1 MiB 时明确返回工具错误。Clear、设备切换、重新启动采集
+（包括重连）或退出后不提供旧会话的新查询，旧会话游标须重新获取。已取得文件快照的请求仍可完成。
+
+完整行为与验证见 [MCP 查询规格](docs/specs/agent-log-query.md)。
 
 ## 键盘操作
 
