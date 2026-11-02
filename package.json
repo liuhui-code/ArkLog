@@ -1,7 +1,7 @@
 {
   "name": "arklog",
   "private": true,
-  "version": "0.2.9",
+  "version": "0.2.10",
   "type": "module",
   "packageManager": "pnpm@10.12.1",
   "scripts": {
