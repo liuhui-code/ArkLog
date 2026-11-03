@@ -718,3 +718,29 @@ both final full runs passed without changing that test's timing policy.
 against the 52,428,800-byte budget. A real pseudo-terminal TUI + epoch fake-HDC
 smoke verified inclusive millisecond range queries, strict-after true/false,
 regex-only queries without time, and a clean Ctrl+Q exit.
+
+## MCP calendar time bounds (2026-11-03)
+
+RED → GREEN vertical slices through `LogQuery` deserialization and snapshot queries:
+
+- RFC 3339 range test failed because string bounds were rejected as non-i64;
+  added string-to-millisecond normalization while preserving the Rust query API.
+- Local calendar/date-only test failed with a parsing error; added explicit
+  calendar formats, host-local timezone resolution and midnight date semantics.
+- Mixed millisecond-string/integer/null test rejected `"-1"`; added integer-string
+  parsing without guessing seconds or using floating-point arithmetic.
+- MCP discovery test still advertised integer-only bounds; updated both schemas
+  and parameter descriptions, then verified string bounds over stdio and IPC.
+- Full validation exposed intermittent `WouldBlock`/connection resets in the
+  existing MCP listener. A split-frame TCP regression reproduced the failure
+  before the fix. Accepted sockets now explicitly use blocking I/O with the
+  existing read/write timeouts, allowing complete frames to arrive before parsing.
+
+Focused `agent_query` and `mcp` suites pass, covering inclusive boundaries,
+optional bounds, exact epoch comparisons, invalid inputs, inverted ranges and
+Unix subprocess checks for DST gaps/overlaps with explicit-offset overrides.
+
+Final macOS verification: `pnpm test` and `cargo test --workspace` each passed
+all 175 tests; `pnpm build`, `cargo check -p arklog`, formatting and diff checks
+passed. Socket tests required a run with permission to bind loopback ports after
+the sandbox rejected binds with `Operation not permitted`.

@@ -1,6 +1,175 @@
 use arklog::{LogQuery, SessionLogStore};
 
 #[test]
+fn queries_inclusive_rfc3339_bounds_with_offsets_and_millisecond_precision() {
+    let mut store = SessionLogStore::new().unwrap();
+    store
+        .append_lines([
+            "1793527200.999 before",
+            "1793527201.000 first",
+            "1793527201.001 middle",
+            "1793527201.002 last",
+            "1793527201.003 after",
+            "unparsed",
+        ])
+        .unwrap();
+    let query: LogQuery = serde_json::from_value(serde_json::json!({
+        "start": "2026-11-01T18:00:01+08:00",
+        "end": "2026-11-01T10:00:01.002Z"
+    }))
+    .unwrap();
+    let page = store.query_snapshot().unwrap().query(&query).unwrap();
+    assert_eq!(
+        page.records.iter().map(|r| r.index).collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+}
+
+#[test]
+fn queries_local_calendar_formats_and_date_only_at_midnight() {
+    use chrono::{Local, TimeZone};
+
+    let time = Local
+        .with_ymd_and_hms(2026, 11, 3, 10, 20, 30)
+        .single()
+        .unwrap();
+    let millis = time.timestamp_millis();
+    let midnight = Local
+        .with_ymd_and_hms(2026, 11, 3, 0, 0, 0)
+        .single()
+        .unwrap()
+        .timestamp_millis();
+    let mut store = SessionLogStore::new().unwrap();
+    store
+        .append_lines([
+            format!("{}.{:03} midnight", midnight / 1000, midnight % 1000),
+            format!("{}.000 exact", millis / 1000),
+            format!("{}.123 fractional", millis / 1000),
+            format!("{}.124 after", millis / 1000),
+            "unparsed".into(),
+        ])
+        .unwrap();
+    for (start, end, expected) in [
+        ("2026-11-03 10:20:30", "2026-11-03 10:20:30.123", vec![1, 2]),
+        ("2026/11/03 10:20:30", "2026/11/03 10:20:30.123", vec![1, 2]),
+        ("2026-11-03T10:20:30", "2026-11-03T10:20:30.123", vec![1, 2]),
+        ("2026-11-03 10:20", "2026/11/03 10:21", vec![1, 2, 3]),
+        ("2026-11-03", "2026/11/03", vec![0]),
+    ] {
+        let query: LogQuery = serde_json::from_value(serde_json::json!({
+            "start": start, "end": end
+        }))
+        .unwrap();
+        let page = store.query_snapshot().unwrap().query(&query).unwrap();
+        assert_eq!(
+            page.records.iter().map(|r| r.index).collect::<Vec<_>>(),
+            expected,
+            "{start} .. {end}"
+        );
+    }
+}
+
+#[test]
+fn accepts_millisecond_strings_mixed_bounds_and_null_with_exact_epoch_comparisons() {
+    use serde_json::json;
+    let mut store = SessionLogStore::new().unwrap();
+    store
+        .append_lines(["-0.001 before", "0.000 epoch", "0.001 after", "unparsed"])
+        .unwrap();
+    for (arguments, expected) in [
+        (
+            json!({"start":"-1", "end":"1970-01-01T00:00:00Z"}),
+            vec![0, 1],
+        ),
+        (
+            json!({"start":-1, "end":"1970-01-01T00:00:00Z"}),
+            vec![0, 1],
+        ),
+        (
+            json!({"start":"1970-01-01T00:00:00.001Z", "end":null}),
+            vec![2],
+        ),
+        (json!({"start":null, "end":" 1 "}), vec![0, 1, 2]),
+        (json!({"start":null, "end":null}), vec![0, 1, 2, 3]),
+    ] {
+        let query: LogQuery = serde_json::from_value(arguments.clone()).unwrap();
+        let page = store.query_snapshot().unwrap().query(&query).unwrap();
+        assert_eq!(
+            page.records.iter().map(|r| r.index).collect::<Vec<_>>(),
+            expected,
+            "{arguments}"
+        );
+    }
+}
+
+#[test]
+fn rejects_invalid_time_values_and_inverted_mixed_format_ranges() {
+    use serde_json::json;
+    for value in [
+        json!(1.5),
+        json!(true),
+        json!([]),
+        json!({}),
+        json!(""),
+        json!("11-01 10:00:00.000"),
+        json!("2026-02-30 10:00:00"),
+        json!("2026-11-03 25:00:00"),
+        json!("2026-11-03T10:00:00+25:00"),
+        json!("9223372036854775808"),
+        json!("2026-11-03 10:00:00 garbage"),
+    ] {
+        for bound in ["start", "end"] {
+            let mut arguments = json!({});
+            arguments[bound] = value.clone();
+            assert!(
+                serde_json::from_value::<LogQuery>(arguments.clone()).is_err(),
+                "{arguments}"
+            );
+        }
+    }
+    let mut store = SessionLogStore::new().unwrap();
+    let query: LogQuery = serde_json::from_value(json!({
+        "start":"1970-01-01T00:00:00.001Z", "end":0
+    }))
+    .unwrap();
+    let error = store.query_snapshot().unwrap().query(&query).unwrap_err();
+    assert!(error.to_string().contains("start must be <= end"));
+}
+
+#[test]
+#[cfg(unix)]
+fn local_dst_gaps_and_overlaps_require_an_explicit_offset() {
+    // Isolate TZ so other tests and Chrono's local timezone cache are unaffected.
+    const CHILD: &str = "ARKLOG_TEST_DST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "local_dst_gaps_and_overlaps_require_an_explicit_offset",
+            ])
+            .env(CHILD, "1")
+            .env("TZ", "America/New_York")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    for time in ["2026-03-08 02:30:00", "2026-11-01 01:30:00"] {
+        let error =
+            serde_json::from_value::<LogQuery>(serde_json::json!({"start":time})).unwrap_err();
+        assert!(error.to_string().contains("explicit UTC offset"), "{error}");
+    }
+    for time in ["2026-03-08T02:30:00-05:00", "2026-11-01T01:30:00-04:00"] {
+        assert!(serde_json::from_value::<LogQuery>(serde_json::json!({"start":time})).is_ok());
+    }
+}
+
+#[test]
 fn queries_raw_session_by_inclusive_time_and_regex_without_changing_ui_filter() {
     let mut store = SessionLogStore::new().unwrap();
     store

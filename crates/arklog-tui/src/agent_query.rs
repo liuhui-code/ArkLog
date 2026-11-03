@@ -3,21 +3,76 @@ use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone};
 use regex::RegexBuilder;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::session_store::SessionDirectory;
 
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LogQuery {
+    #[serde(deserialize_with = "deserialize_time_bound")]
     pub start: Option<i64>,
+    #[serde(deserialize_with = "deserialize_time_bound")]
     pub end: Option<i64>,
     pub regex: Option<String>,
     pub limit: usize,
     pub cursor: u64,
     pub session_id: Option<String>,
     pub until: Option<u64>,
+}
+
+fn deserialize_time_bound<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<i64>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum TimeBound {
+        Millis(i64),
+        Text(String),
+    }
+
+    Option::<TimeBound>::deserialize(deserializer)?
+        .map(|bound| match bound {
+            TimeBound::Millis(millis) => Ok(millis),
+            TimeBound::Text(text) => {
+                parse_time_bound(text.trim()).map_err(serde::de::Error::custom)
+            }
+        })
+        .transpose()
+}
+
+fn parse_time_bound(text: &str) -> Result<i64, &'static str> {
+    if let Ok(millis) = text.parse::<i64>() {
+        return Ok(millis);
+    }
+    if let Ok(time) = DateTime::parse_from_rfc3339(text) {
+        return Ok(time.timestamp_millis());
+    }
+    let local = [
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y/%m/%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M",
+        "%Y-%m-%dT%H:%M",
+    ]
+    .iter()
+    .find_map(|format| NaiveDateTime::parse_from_str(text, format).ok())
+    .or_else(|| {
+        ["%Y-%m-%d", "%Y/%m/%d"].iter().find_map(|format| {
+            NaiveDate::parse_from_str(text, format)
+                .ok()?
+                .and_hms_opt(0, 0, 0)
+        })
+    })
+    .ok_or("invalid time: expected Unix millisecond integer, RFC3339, YYYY-MM-DD[ HH:mm[:ss[.fraction]]] or YYYY/MM/DD[ HH:mm[:ss[.fraction]]]")?;
+    Local
+        .from_local_datetime(&local)
+        .single()
+        .map(|time| time.timestamp_millis())
+        .ok_or("ambiguous or nonexistent local time; supply RFC3339 with an explicit UTC offset")
 }
 
 impl Default for LogQuery {

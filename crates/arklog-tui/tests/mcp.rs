@@ -38,10 +38,17 @@ fn stdio_negotiates_mcp_and_advertises_read_only_query_tools() {
         "boolean"
     );
     assert!(tools[1]["inputSchema"].get("required").is_none());
-    assert_eq!(
-        tools[1]["inputSchema"]["properties"]["start"]["type"],
-        "integer"
-    );
+    for bound in ["start", "end"] {
+        assert_eq!(
+            tools[1]["inputSchema"]["properties"][bound]["type"],
+            json!(["integer", "string", "null"])
+        );
+        let description = tools[1]["inputSchema"]["properties"][bound]["description"]
+            .as_str()
+            .unwrap();
+        assert!(description.contains("RFC3339"));
+        assert!(description.contains("local timezone"));
+    }
     assert_eq!(tools[0]["name"], "arklog_session");
     assert_eq!(tools[1]["name"], "arklog_query_logs");
     assert_eq!(tools[1]["annotations"]["readOnlyHint"], true);
@@ -78,6 +85,12 @@ fn mcp_queries_the_running_controller_and_reports_invalid_regex_as_tool_error() 
             json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"arklog_has_logs","arguments":{}}}),
             json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"arklog_query_logs","arguments":{"regex":"error"}}}),
             json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"arklog_query_logs","arguments":{"start":"11-01 10:00:00.000"}}}),
+            json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"arklog_query_logs","arguments":{
+                "start":"2026-11-01T18:00:01+08:00","end":"2026-11-01T10:00:01Z","regex":"error"}}}),
+            json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"arklog_query_logs","arguments":{
+                "start":"2026-02-30 10:00:00"}}}),
+            json!({"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"arklog_query_logs","arguments":{
+                "start":"2026-11-01T10:00:01.001Z","end":1793527201000_i64}}}),
         ];
         let input = messages
             .iter()
@@ -126,9 +139,66 @@ fn mcp_queries_the_running_controller_and_reports_invalid_regex_as_tool_error() 
         1
     );
     assert_eq!(responses[9]["result"]["isError"], true);
+    assert_eq!(
+        responses[10]["result"]["isError"], false,
+        "{}",
+        responses[10]
+    );
+    assert_eq!(
+        responses[10]["result"]["structuredContent"]["records"],
+        json!([{"index":1,"text":"1793527201.000 1 2 E App ERROR match"}])
+    );
+    for index in [11, 12] {
+        assert_eq!(responses[index]["result"]["isError"], true);
+    }
     assert_eq!(controller.state().visible_count(), 0);
     drop(runtime);
     assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
+}
+
+#[test]
+fn runtime_waits_for_a_complete_query_frame_before_parsing_time_bounds() {
+    use arklog::{ArkLogController, McpRuntime};
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpStream;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    let mut controller = ArkLogController::new("unused-hdc", vec![]).unwrap();
+    controller
+        .state_mut()
+        .append_lines(["0.000 epoch"])
+        .unwrap();
+    let runtime = McpRuntime::start(0).unwrap();
+    let address = runtime.local_addr();
+    let client = thread::spawn(move || {
+        let mut stream = TcpStream::connect(address).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        stream
+            .write_all(b"{\"name\":\"arklog_query_logs\",\"arguments\":")
+            .unwrap();
+        thread::sleep(Duration::from_millis(100));
+        stream
+            .write_all(b"{\"start\":\"1970-01-01T00:00:00Z\",\"end\":0}}\n")
+            .unwrap();
+        let mut response = String::new();
+        BufReader::new(stream).read_line(&mut response).unwrap();
+        serde_json::from_str::<Value>(&response).unwrap()
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !client.is_finished() {
+        assert!(Instant::now() < deadline, "MCP request blocked");
+        runtime.pump(&mut controller);
+        thread::sleep(Duration::from_millis(1));
+    }
+    let response = client.join().unwrap();
+    assert_eq!(response["isError"], false, "{response}");
+    assert_eq!(
+        response["structuredContent"]["records"],
+        json!([{"index":0,"text":"0.000 epoch"}])
+    );
 }
 
 #[test]

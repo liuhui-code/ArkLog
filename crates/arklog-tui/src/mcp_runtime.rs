@@ -42,6 +42,9 @@ impl McpRuntime {
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
                 let result = (|| {
+                    // Accepted sockets can inherit the listener's nonblocking mode.
+                    // Read complete frames with the configured timeout instead.
+                    stream.set_nonblocking(false)?;
                     let request =
                         read_message(&mut BufReader::new(&mut stream), MAX_REQUEST_BYTES)?
                             .ok_or_else(|| io::Error::other("empty request"))?;

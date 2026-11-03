@@ -13,13 +13,24 @@ second collector, persistent log database or HTTP transport are added.
 
 - `arklog_session`: session ID, selected device ID (nullable), raw record count.
 - `arklog_query_logs`: optional inclusive `start` / `end` as signed Unix
-  millisecond integers; optional case-insensitive Rust `regex`; `limit` (1–1000,
+  millisecond integers or strings; optional case-insensitive Rust `regex`; `limit` (1–1000,
   default 100); `cursor` (raw record ordinal, default 0); `session_id`; `until`.
   No time arguments are required; either bound can be supplied independently.
+  Null omits a bound. Accepted strings (trimmed) are integer Unix milliseconds,
+  RFC 3339 with `Z`/offset, `YYYY-MM-DD HH:mm[:ss[.fraction]]`,
+  `YYYY-MM-DDTHH:mm[:ss[.fraction]]`, `YYYY/MM/DD HH:mm[:ss[.fraction]]`,
+  and date-only `YYYY-MM-DD` / `YYYY/MM/DD`. Calendar strings without an offset
+  use the runtime host's local timezone; ambiguous/nonexistent DST times fail
+  with guidance to supply an explicit offset. Dates mean midnight for both
+  bounds; end dates are not expanded to end-of-day. Sub-millisecond digits are
+  truncated. Integer values/strings always mean milliseconds, never guessed
+  seconds. Calendar strings require a year; the current year is never inferred.
+  Bounds may mix formats.
 - The collector runs `hdc -t <device> hilog -v epoch`. HiLog prints device Unix
   seconds with millisecond precision; integer arithmetic converts that prefix
-  to Unix milliseconds. No host timezone/year or ingestion time is substituted.
-  Time ranges may cross years; inverted bounds and noninteger input fail.
+  to Unix milliseconds. No host timezone/year or ingestion time is substituted
+  for raw log timestamps.
+  Time ranges may cross years; inverted bounds, floats and invalid formats fail.
   Unparseable timestamps are excluded only when a time bound is present.
 - `arklog_has_logs`: required case-insensitive `regex`, optional Unix millisecond
   `after`. Returns structured `{ "exists": boolean }`, without log text. With
@@ -84,5 +95,12 @@ runtime, listener shutdown, and the binary's terminal-free `--mcp` mode.
 Timestamp/boolean follow-up tests additionally cover optional start/end, exact
 millisecond comparisons around the Unix epoch, strict `after` boundaries,
 regex-only existence, matches beyond the first scan page, no-match completion,
-large matching records, rejected string timestamps, MCP boolean schema/results,
+large matching records, rejected yearless timestamps, MCP boolean schema/results,
 HDC epoch arguments and neutral epoch fields with only Level colored.
+
+Calendar-bound tests cover RFC 3339 offset equivalence, inclusive millisecond
+boundaries, local calendar formats, midnight dates, mixed integer/string/null
+bounds, exact negative-epoch comparisons, malformed inputs and inverted ranges.
+On Unix, a subprocess with `TZ=America/New_York` checks DST gaps/overlaps and
+explicit-offset overrides. MCP tests cover discovery schemas and the complete
+stdio-to-runtime query path with string bounds.
