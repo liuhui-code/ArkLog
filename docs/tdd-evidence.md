@@ -779,3 +779,12 @@ Shift+End, Ctrl+C into the system clipboard, editor mouse release and clean
 Ctrl+Q exit; the previous clipboard was restored afterward. `pnpm memory:check`
 passed 100,000 records at 13,139,968 bytes peak RSS against 52,428,800 bytes.
 Native Windows Terminal interaction was not exercised on this macOS host.
+
+## v0.2.12 release preflight (2026-11-15)
+
+The updated public release-version test failed against v0.2.11 metadata before
+updating the Rust package, root package.json and Cargo.lock to v0.2.12. The
+focused release workflow suite then passed. Final `pnpm test` and
+`cargo test --workspace` each passed all 189 tests; `pnpm build`,
+`cargo check -p arklog`, formatting and diff checks passed. The v0.2.12 release
+memory probe passed at 13,053,952 bytes peak RSS for 100,000 records.
