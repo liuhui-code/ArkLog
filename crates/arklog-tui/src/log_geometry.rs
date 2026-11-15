@@ -128,7 +128,7 @@ pub(crate) fn cell_range_for_bytes(text: &str, bytes: &Range<usize>) -> Option<R
     start_column.zip(end_column).map(|(start, end)| start..end)
 }
 
-fn grapheme_width(grapheme: &str, column: u64) -> u64 {
+pub(crate) fn grapheme_width(grapheme: &str, column: u64) -> u64 {
     if grapheme == "\t" {
         theme::LOG_TAB_STOP_CELLS - column % theme::LOG_TAB_STOP_CELLS
     } else {

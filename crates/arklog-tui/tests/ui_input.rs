@@ -59,6 +59,7 @@ fn long_input_keeps_the_cursor_suffix_visible() {
                     window_start_cell: 0,
                     horizontal_offset: 0,
                     soft_wrap: false,
+                    log_selection: None,
                     lines: &[],
                     input_mode: InputMode::Filter,
                     overlay: OverlayMode::None,

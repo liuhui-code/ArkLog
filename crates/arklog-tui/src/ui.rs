@@ -10,7 +10,7 @@ use regex::Regex;
 use crate::{
     input_ui::render_text_input,
     log_geometry::{horizontal_slice, literal_match_ranges_in, wrapped_slices, VisibleGrapheme},
-    theme, LogTab, StreamAction, StreamState, TextInputView,
+    theme, LogSelection, LogTab, StreamAction, StreamState, TextInputView,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +51,7 @@ pub struct AppView<'a> {
     pub horizontal_offset: u64,
     pub soft_wrap: bool,
     pub lines: &'a [String],
+    pub log_selection: Option<&'a LogSelection>,
     pub input_mode: InputMode,
     pub overlay: OverlayMode,
     pub input: TextInputView<'a>,
@@ -63,6 +64,7 @@ pub struct AppView<'a> {
 pub struct AppLayoutGeometry {
     pub controls: Rect,
     pub workspace: Rect,
+    pub log_content: Rect,
     pub log_content_height: usize,
     pub log_content_width: usize,
 }
@@ -76,6 +78,13 @@ pub fn app_layout(area: Rect) -> AppLayoutGeometry {
     AppLayoutGeometry {
         controls,
         workspace,
+        log_content: if area.width < theme::MIN_TERMINAL_WIDTH
+            || area.height < theme::MIN_TERMINAL_HEIGHT
+        {
+            Rect::default()
+        } else {
+            theme::panel_content_area(workspace)
+        },
         log_content_height: theme::panel_content_height(workspace.height),
         log_content_width: theme::panel_content_width(workspace.width),
     }
@@ -352,6 +361,9 @@ fn render_hilog(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
     for (offset, raw) in view.lines.iter().enumerate() {
         let visible_index = view.window_start + offset as u64;
         let current = view.current_find_visible_index == Some(visible_index);
+        let selected = view.log_selection.map_or(0..0, |selection| {
+            selection.range_for_record(visible_index, raw.len())
+        });
         if view.soft_wrap {
             let start_cell = if offset == 0 {
                 view.window_start_cell
@@ -366,6 +378,7 @@ fn render_hilog(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
                 start_cell,
                 content_width,
                 content_height.saturating_sub(lines.len()),
+                &selected,
             ));
         } else {
             lines.push(styled_log_line(
@@ -375,6 +388,7 @@ fn render_hilog(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
                 current,
                 view.horizontal_offset,
                 content_width,
+                &selected,
             ));
         }
         if lines.len() == content_height {
@@ -455,6 +469,7 @@ fn styled_log_line(
     current_find: bool,
     horizontal_offset: u64,
     content_width: usize,
+    selected: &std::ops::Range<usize>,
 ) -> Line<'static> {
     let level = log_level_field(raw);
     let visible = horizontal_slice(raw, horizontal_offset, content_width);
@@ -478,6 +493,7 @@ fn styled_log_line(
         &filter_ranges,
         &find_ranges,
         current_find,
+        selected,
     ));
     if visible.hidden_right {
         spans.push(Span::styled(
@@ -496,6 +512,7 @@ fn styled_wrapped_log_lines(
     start_cell: u64,
     content_width: usize,
     limit: usize,
+    selected: &std::ops::Range<usize>,
 ) -> Vec<Line<'static>> {
     let level = log_level_field(raw);
     let rows = wrapped_slices(raw, start_cell, content_width, limit);
@@ -531,6 +548,7 @@ fn styled_wrapped_log_lines(
                 &filter_ranges,
                 &find_ranges,
                 current_find,
+                selected,
             ));
             Line::from(spans)
         })
@@ -564,6 +582,7 @@ fn styled_graphemes(
     filter_ranges: &[std::ops::Range<usize>],
     find_ranges: &[std::ops::Range<usize>],
     current_find: bool,
+    selected: &std::ops::Range<usize>,
 ) -> Vec<Span<'static>> {
     graphemes
         .into_iter()
@@ -580,6 +599,7 @@ fn styled_graphemes(
                 filter_ranges
                     .iter()
                     .any(|range| ranges_overlap(range, &grapheme.source)),
+                ranges_overlap(selected, &grapheme.source),
             );
             Span::styled(grapheme.text, style)
         })

@@ -1,4 +1,7 @@
-use arklog::{render_app, AppView, InputMode, LogTab, OverlayMode, StreamState, TextInputView};
+use arklog::{
+    render_app, AppView, ArkLogState, Clipboard, InputMode, LogSelection, LogTab, OverlayMode,
+    StreamState, TextInputView,
+};
 use ratatui::{
     backend::TestBackend,
     style::{Color, Modifier},
@@ -11,6 +14,16 @@ fn render_hilog(
     filter: Option<&Regex>,
     find_query: &str,
     current_find_visible_index: Option<u64>,
+) -> Terminal<TestBackend> {
+    render_hilog_selection(lines, filter, find_query, current_find_visible_index, None)
+}
+
+fn render_hilog_selection(
+    lines: &[String],
+    filter: Option<&Regex>,
+    find_query: &str,
+    current_find_visible_index: Option<u64>,
+    selection: Option<&LogSelection>,
 ) -> Terminal<TestBackend> {
     let backend = TestBackend::new(110, 28);
     let mut terminal = Terminal::new(backend).expect("terminal");
@@ -43,6 +56,7 @@ fn render_hilog(
                     horizontal_offset: 0,
                     soft_wrap: false,
                     lines,
+                    log_selection: selection,
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::None,
                     input: TextInputView::at_end(""),
@@ -54,6 +68,48 @@ fn render_hilog(
         })
         .expect("draw");
     terminal
+}
+
+#[test]
+fn selected_log_characters_use_only_the_low_contrast_background() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    struct NoClipboard;
+    impl Clipboard for NoClipboard {
+        fn get_text(&mut self) -> Result<String, String> {
+            unreachable!()
+        }
+        fn set_text(&mut self, _: &str) -> Result<(), String> {
+            unreachable!()
+        }
+    }
+    let raw = "0 E message tail";
+    let mut state = ArkLogState::new().unwrap();
+    state.append_lines([raw]).unwrap();
+    state.set_viewport_size(108, 23);
+    for _ in 0..11 {
+        state
+            .handle_log_key(
+                KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT),
+                &mut NoClipboard,
+            )
+            .unwrap();
+    }
+    let lines = [raw.to_string()];
+    let terminal = render_hilog_selection(
+        &lines,
+        Some(&Regex::new("message").unwrap()),
+        "",
+        None,
+        state.log_selection(),
+    );
+    let buffer = terminal.backend().buffer();
+    let index = cell_index(buffer, raw);
+    for offset in 0..11 {
+        assert_eq!(buffer.content()[index + offset].bg, Color::Rgb(49, 50, 68));
+    }
+    assert_eq!(buffer.content()[index + 2].fg, Color::Rgb(243, 139, 168));
+    assert_eq!(buffer.content()[index + 4].fg, Color::Rgb(249, 226, 175));
+    assert_eq!(buffer.content()[index + 12].bg, Color::Rgb(30, 30, 46));
 }
 
 fn cell_index(buffer: &ratatui::buffer::Buffer, text: &str) -> usize {

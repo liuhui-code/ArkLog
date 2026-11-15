@@ -51,8 +51,8 @@ without bound.
     application view-navigation commands.
     Filter/Find inputs support bounded desktop editing with Ctrl on Windows and
     Command on macOS: select/copy/cut/paste, undo/redo, cursor selection, plus
-    platform-native word/line navigation and deletion. Terminal log-copy
-    shortcuts remain unclaimed.
+    platform-native word/line navigation and deletion. HiLog body selection
+    shortcuts are scoped to normal browsing and do not intercept input editing.
     Device refresh preserves an online selected stream and stops a stale stream
     when its device disappears or goes offline.
 12. Device discovery, Fault Log fetch, and stream stop run as single-flight
@@ -91,6 +91,24 @@ without bound.
 22. UTF-8 byte ranges, grapheme boundaries, and terminal cell columns remain
     distinct. Tabs expand only for display at a four-cell tab stop. Overflow
     and continuation markers never enter matching, storage, or raw copying.
+23. HiLog has application-owned left-button drag selection and keyboard range
+    selection: Shift+Left/Right move by grapheme, Shift+Up/Down by source record,
+    Shift+Home/End to record boundaries and Shift+PgUp/PgDn by viewport height.
+    Ctrl+A selects the current filtered record snapshot; Ctrl+C copies raw text.
+    Esc clears selection and Ctrl+G clears selection and resumes follow-latest.
+    Starting a selection freezes the viewport anchor without stopping capture.
+    Selection stores two `(visible-record, UTF-8-byte)` endpoints, survives append
+    and resize, and is invalidated by filters, Find navigation, Clear, session
+    replacement or view changes. Copy reads records incrementally, with a 1 MiB /
+    10,000-record limit and an explicit error instead of truncation or clipboard
+    replacement on failure. Selected characters use the low-contrast selection
+    background, preserving Level color and actual regex/Find match colors.
+    Mouse hit testing uses the same grapheme slices and cosmetic dimensions as
+    rendering, including horizontal overflow, wrapped rows and expanded tabs.
+    Mouse capture belongs only to normal HiLog browsing and is released for
+    editors, overlays, Fault Log, errors and exit. Terminal-native shortcuts such
+    as Windows Terminal's Ctrl+Shift+C may be intercepted by the host; Ctrl+C is
+    the application copy shortcut. Windows Quick Edit protection stays in place.
 
 ## Object boundaries
 

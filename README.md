@@ -15,6 +15,7 @@ macOS Terminal/iTerm2，不再依赖浏览器窗口承载实时日志。
 - `Ctrl+W` 可切换按终端显示格软换行；滚动、resize、Find 和 follow-latest 共用同一个内容锚点
 - 正则过滤保留当前进程最近 50 条成功表达式，编辑时用上下键复用；不保存查询结果或日志快照
 - 滚动离开末尾后固定当前锚点，按 `Ctrl+G` 回到最新并恢复自动跟随
+- HiLog 支持鼠标拖选、Shift 方向键扩展选区和 `Ctrl+C` 复制原文；选择期间固定视窗但继续采集
 - HiLog/Fault Log 共用工作区，通过 `F1`/`F2` 直接选择；普通浏览时也支持 `Tab`/`Shift+Tab` 切换，Fault Log 可刷新和浏览原始诊断
 - 顶部设备、日志视图、过滤/查找和流状态共用一行紧凑控制区；没有底部状态栏，HiLog 使用完整工作区宽度
 - HDC 查询带超时与输出上限，设备刷新、Fault Log 查询和停流均不阻塞界面线程
@@ -26,7 +27,7 @@ macOS Terminal/iTerm2，不再依赖浏览器窗口承载实时日志。
 
 ## 运行
 
-可从 GitHub Releases 下载 `ArkLog-windows-x86_64.exe`、
+可从 [GitHub Releases](https://github.com/liuhui-code/ArkLog/releases/latest) 下载 `ArkLog-windows-x86_64.exe`、
 `ArkLog-macos-x86_64` 或 `ArkLog-macos-aarch64`。
 macOS 首次运行前需要赋予执行权限：
 
@@ -185,11 +186,23 @@ ArkLog；两端端口必须相同，适配器未设置端口时使用 `38765`。
 按词移动/删除，macOS 用 `Option` 按词、`⌘` 按整行。输入、粘贴及 32 级
 撤销历史均有界，不会随日志增长。
 
-日志正文的鼠标选择和复制仍由终端处理：macOS 使用 `⌘C`，Windows Terminal
-通常使用 `Ctrl+Shift+C`。`Ctrl+C` 不再作为 ArkLog 的退出键。
+HiLog 正文支持应用内选择与复制（Windows Terminal 同样适用）：
+
+- 鼠标左键拖动可跨行选择；滚轮上下滚动。
+- `Shift+←/→` 按完整字符扩展选区，`Shift+↑/↓` 按原始记录扩展；
+  `Shift+Home/End` 选到记录开头/结尾，`Shift+PgUp/PgDn` 跨页扩展。
+- `Ctrl+A` 选择当前过滤结果中的全部记录；后续新日志不加入已有选区。
+- **`Ctrl+C` 复制 ArkLog 选区**，`Esc` 取消。Windows Terminal 的 `Ctrl+Shift+C`
+  通常由终端截获，用于终端自身的屏幕选区；复制 ArkLog 选区请使用 `Ctrl+C`。
+- 选择时暂停自动跟随，后台继续采集；`Ctrl+G` 清除选区并恢复跟随。
+  Clear、过滤条件变化、会话替换或切换日志视图会清除选区。
+- 复制原始 UTF-8 文本及 Tab，保留原始记录之间的换行；不复制边框、溢出符或软换行续行符。
+  单次复制最多 1 MiB、10,000 条记录，超出时明确报错并保留原剪贴板内容。
+
+鼠标捕获只在 HiLog 正文浏览时启用，退出、进入查询编辑器或切换视图时释放。
+Fault Log 的屏幕选区仍由终端处理。`Ctrl+C` 不作为 ArkLog 的退出键。
 Windows 经典控制台运行期间会关闭 Quick Edit，避免鼠标误选文本后暂停控制台 I/O、
-导致全部快捷键失去响应；退出时恢复启动前的控制台输入设置。需要鼠标选区复制时，
-建议使用 Windows Terminal。
+导致全部快捷键失去响应；退出时恢复启动前的控制台输入设置。
 
 普通单字符不会触发命令；在正则和查找输入框中可直接输入文本。
 
@@ -201,8 +214,9 @@ lowercase 或预编译保存。选择历史项只替换编辑内容，仍需再�
 默认显示策略仍是一条原始记录占一行。横向偏移按终端 cell 计算，左右溢出符只表示
 对应方向确有隐藏内容；它们和软换行续行符都不是原文，不参与存储、匹配或复制。
 Soft Wrap 按 Unicode 字素边界折行，无空格 URL/JSON 也可继续阅读；Tab 仅在显示时按
-4-cell tab stop 展开，磁盘中的 UTF-8 原始记录保持不变。终端宿主的屏幕选区复制仍只
-复制可见选区；需要完整记录时应从原始会话数据取得，不能把屏幕选区误认为完整记录。
+4-cell tab stop 展开，磁盘中的 UTF-8 原始记录保持不变。应用内选区使用原文字节位置，
+横向滚动、Soft Wrap 和终端缩放不会把显示标记混入复制内容；需要整条长记录时可用
+`Shift+Home/End`，需要当前过滤结果的全部记录时可用 `Ctrl+A`，均受上述复制上限约束。
 
 ## 执行诊断日志
 

@@ -34,6 +34,7 @@ fn minimum_width_hilog_view_maximizes_log_workspace_without_a_footer() {
                     window_start_cell: 0,
                     horizontal_offset: 0,
                     soft_wrap: false,
+                    log_selection: None,
                     lines: &lines,
                     input_mode: InputMode::Normal,
                     overlay: OverlayMode::None,

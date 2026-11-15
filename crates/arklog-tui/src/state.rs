@@ -2,6 +2,10 @@ use std::io;
 
 use regex::Regex;
 
+#[path = "log_selection.rs"]
+mod selection;
+pub use selection::LogSelection;
+
 use crate::{
     log_geometry::{
         cell_range_for_bytes, display_width, first_literal_match_range, next_wrapped_row_start,
@@ -43,6 +47,8 @@ pub struct ArkLogState {
     filter_history: QueryHistory,
     soft_wrap: bool,
     tab: LogTab,
+    selection: Option<LogSelection>,
+    mouse_dragging: bool,
 }
 
 impl ArkLogState {
@@ -61,6 +67,8 @@ impl ArkLogState {
             filter_history: QueryHistory::new(),
             soft_wrap: false,
             tab: LogTab::HiLog,
+            selection: None,
+            mouse_dragging: false,
         })
     }
 
@@ -82,6 +90,7 @@ impl ArkLogState {
     }
 
     pub fn apply_filter(&mut self, query: impl Into<String>) -> Result<(), String> {
+        self.clear_log_selection();
         self.filter_query = query.into();
         self.filter_error = self.store.set_filter(&self.filter_query).err();
         if self.filter_error.is_none() {
@@ -131,6 +140,7 @@ impl ArkLogState {
     }
 
     pub fn clear(&mut self) -> io::Result<()> {
+        self.clear_log_selection();
         self.store.clear()?;
         self.viewport_anchor = None;
         self.current_find = 0;
@@ -139,6 +149,7 @@ impl ArkLogState {
     }
 
     pub fn set_find(&mut self, query: impl Into<String>) -> io::Result<()> {
+        self.clear_log_selection();
         self.find_query = query.into();
         self.store.set_find(&self.find_query)?;
         self.current_find = 0;
@@ -167,10 +178,14 @@ impl ArkLogState {
     }
 
     pub fn select_tab(&mut self, tab: LogTab) {
+        if self.tab != tab {
+            self.clear_log_selection();
+        }
         self.tab = tab;
     }
 
     pub fn next_tab(&mut self) {
+        self.clear_log_selection();
         self.tab = match self.tab {
             LogTab::HiLog => LogTab::FaultLog,
             LogTab::FaultLog => LogTab::HiLog,
@@ -178,6 +193,7 @@ impl ArkLogState {
     }
 
     pub fn next_find(&mut self) -> io::Result<()> {
+        self.clear_log_selection();
         let count = self.store.find_count();
         if count > 0 {
             self.current_find = (self.current_find + 1) % count;
@@ -186,6 +202,7 @@ impl ArkLogState {
     }
 
     pub fn previous_find(&mut self) -> io::Result<()> {
+        self.clear_log_selection();
         let count = self.store.find_count();
         if count > 0 {
             self.current_find = if self.current_find == 0 {
@@ -231,10 +248,11 @@ impl ArkLogState {
         if !self.soft_wrap {
             let latest = self.store.visible_count().saturating_sub(height as u64);
             let next = self.window_start(height).saturating_add(rows);
-            self.viewport_anchor = (next < latest).then_some(ViewportAnchor {
-                record: next,
-                cell: 0,
-            });
+            self.viewport_anchor =
+                (next < latest || self.selection.is_some()).then_some(ViewportAnchor {
+                    record: next.min(latest),
+                    cell: 0,
+                });
             return Ok(());
         }
         let latest = self.latest_display_anchor()?;
@@ -250,7 +268,8 @@ impl ArkLogState {
                 break;
             }
         }
-        self.viewport_anchor = (anchor < latest).then_some(anchor);
+        self.viewport_anchor =
+            (anchor < latest || self.selection.is_some()).then_some(anchor.min(latest));
         Ok(())
     }
 
@@ -347,6 +366,7 @@ impl ArkLogState {
     }
 
     pub fn follow_latest(&mut self) {
+        self.clear_log_selection();
         self.viewport_anchor = None;
     }
 

@@ -10,12 +10,15 @@ use arklog::{
     TextInput, DEFAULT_MCP_PORT, EXECUTION_LOG_MAX_BYTES, MEMORY_BUDGET_BYTES,
 };
 use ratatui::{
-    crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent},
+    layout::Rect,
     DefaultTerminal,
 };
 
 mod system_clipboard;
 use system_clipboard::SystemClipboard;
+mod mouse_capture;
+use mouse_capture::MouseCapture;
 #[cfg(windows)]
 mod windows_console;
 
@@ -241,8 +244,10 @@ impl TerminalApp {
     }
 
     fn run(mut self, terminal: &mut DefaultTerminal, mcp: Option<&McpRuntime>) -> io::Result<()> {
+        let mut mouse_capture = MouseCapture::new(io::stdout());
         let mut redraw = RedrawState::new();
         while !self.should_quit {
+            mouse_capture.set_enabled(self.browsing_hilog())?;
             match self
                 .controller
                 .pump_log_batches_limited(MAX_LOG_BATCHES_PER_TICK)
@@ -313,6 +318,7 @@ impl TerminalApp {
                             horizontal_offset: state.horizontal_offset(),
                             soft_wrap: state.soft_wrap(),
                             lines: &lines,
+                            log_selection: state.log_selection(),
                             input_mode: self.input_mode,
                             overlay: self.overlay,
                             input: self.input.view(),
@@ -338,6 +344,9 @@ impl TerminalApp {
                         redraw.mark();
                     }
                     Event::Resize(_, _) => redraw.mark(),
+                    Event::Mouse(mouse) => {
+                        redraw.mark_if(self.handle_mouse(mouse, terminal.size()?.into()));
+                    }
                     Event::Paste(text) if self.input_mode != InputMode::Normal => {
                         self.input.insert_text(&text);
                         redraw.mark();
@@ -355,7 +364,41 @@ impl TerminalApp {
         Ok(())
     }
 
+    fn handle_mouse(&mut self, mouse: MouseEvent, area: Rect) -> bool {
+        if !self.browsing_hilog() {
+            return false;
+        }
+        let content = app_layout(area).log_content;
+        match self.controller.state_mut().handle_log_mouse(mouse, content) {
+            Ok(changed) => changed,
+            Err(error) => {
+                self.record(Err(error.to_string()));
+                true
+            }
+        }
+    }
+
+    fn browsing_hilog(&self) -> bool {
+        self.input_mode == InputMode::Normal
+            && self.overlay == OverlayMode::None
+            && self.controller.state().tab() == LogTab::HiLog
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
+        if self.browsing_hilog() {
+            match self
+                .controller
+                .state_mut()
+                .handle_log_key(key, &mut self.clipboard)
+            {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(error) => {
+                    self.record(Err(error));
+                    return;
+                }
+            }
+        }
         let command_context = if self.overlay == OverlayMode::Devices {
             CommandContext::Devices
         } else if self.controller.state().tab() == LogTab::FaultLog {
@@ -642,7 +685,85 @@ impl TerminalApp {
 mod tests {
     use super::{should_relaunch_in_windows_terminal, RedrawState, TerminalApp};
     use arklog::{ArkLogController, InputMode, LogTab, OverlayMode, TextInput};
-    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+    use ratatui::{
+        crossterm::event::{
+            KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        },
+        layout::Rect,
+    };
+
+    #[test]
+    #[cfg(unix)]
+    fn leaving_log_selection_restores_terminal_mouse_handling_even_on_error() {
+        let mut output = Vec::new();
+        let fail = |output: &mut Vec<u8>| -> std::io::Result<()> {
+            let mut capture = super::MouseCapture::new(output);
+            capture.set_enabled(true)?;
+            capture.set_enabled(true)?;
+            Err(std::io::Error::other("simulated event failure"))
+        };
+        assert!(fail(&mut output).is_err());
+        let commands = String::from_utf8(output).unwrap();
+        assert_eq!(commands.matches("\u{1b}[?1000h").count(), 1);
+        assert_eq!(commands.matches("\u{1b}[?1000l").count(), 1);
+    }
+
+    #[test]
+    fn mouse_selection_reaches_hilog_but_not_query_editors_or_device_overlays() {
+        let controller = ArkLogController::new("unused-hdc", vec![]).unwrap();
+        let mut app = TerminalApp::new(controller, None, None);
+        app.controller
+            .state_mut()
+            .append_lines(["first line"])
+            .unwrap();
+        app.controller.state_mut().set_viewport_size(78, 15);
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        };
+        let area = Rect::new(0, 0, 80, 20);
+        app.input_mode = InputMode::Filter;
+        assert!(!app.handle_mouse(click, area));
+        app.input_mode = InputMode::Normal;
+        app.overlay = OverlayMode::Devices;
+        assert!(!app.handle_mouse(click, area));
+        app.overlay = OverlayMode::None;
+        assert!(app.handle_mouse(click, area));
+        let release = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 6,
+            ..click
+        };
+        assert!(app.handle_mouse(release, area));
+        assert_eq!(
+            app.controller
+                .state_mut()
+                .selected_log_text()
+                .unwrap()
+                .as_deref(),
+            Some("first")
+        );
+    }
+
+    #[test]
+    fn selecting_log_text_with_shift_arrows_pauses_following_live_logs() {
+        let controller = ArkLogController::new("unused-hdc", vec![]).unwrap();
+        let mut app = TerminalApp::new(controller, None, None);
+        app.controller
+            .state_mut()
+            .append_lines(["first log", "second log"])
+            .unwrap();
+        app.controller.state_mut().set_viewport_size(80, 10);
+
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+
+        assert!(
+            !app.controller.state().is_following_latest(),
+            "selecting text must hold the viewport still"
+        );
+    }
 
     #[test]
     fn shift_tab_switches_between_the_log_views() {

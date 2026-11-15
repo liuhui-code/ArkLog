@@ -744,3 +744,38 @@ Final macOS verification: `pnpm test` and `cargo test --workspace` each passed
 all 175 tests; `pnpm build`, `cargo check -p arklog`, formatting and diff checks
 passed. Socket tests required a run with permission to bind loopback ports after
 the sandbox rejected binds with `Operation not permitted`.
+
+## HiLog text selection and copy (2026-11-15)
+
+The log body had no application-owned selection or mouse event handling, and
+its normal keyboard dispatcher ignored selection/copy keys. Terminal-native
+selection alone did not provide dependable selection during live redraws.
+Windows Quick Edit remains disabled to preserve the earlier freeze fix.
+
+RED → GREEN slices:
+
+- A real `TerminalApp::handle_key` regression showed Shift+Right left the view
+  following live output. Added two source-byte selection endpoints and a frozen
+  viewport anchor; a public state test then copied Chinese, combining marks and
+  emoji through the existing clipboard interface.
+- Cross-record keyboard selection and filtered-snapshot Ctrl+A tests failed;
+  added range navigation, raw newline handling and lifecycle invalidation.
+- An oversized-copy test replaced the clipboard instead of failing; bounded
+  incremental reads now reject copies above 1 MiB or 10,000 records.
+- Mouse dispatch and rendering tests initially lacked selection interfaces;
+  connected drag events to the same horizontal/wrapped source slices as the
+  renderer and added semantic low-contrast selection styling in the theme.
+- A terminal-capture lifetime test failed before capture ownership existed;
+  the guard now releases mouse reporting on context changes, errors and exit.
+- Additional regressions exposed an omitted final character when dragging past
+  the right edge, invisible keyboard range endpoints, and accidental resumption
+  of follow-latest after scrolling to the bottom with a selection. Focused tests
+  pass after correcting clipping, caret reveal and anchor retention.
+
+Final macOS verification: `pnpm test` and `cargo test --workspace` each passed
+all 189 tests; `pnpm build`, `cargo check -p arklog`, formatting and diff checks
+passed. A real PTY with fake HDC verified the release binary's mouse drag,
+Shift+End, Ctrl+C into the system clipboard, editor mouse release and clean
+Ctrl+Q exit; the previous clipboard was restored afterward. `pnpm memory:check`
+passed 100,000 records at 13,139,968 bytes peak RSS against 52,428,800 bytes.
+Native Windows Terminal interaction was not exercised on this macOS host.

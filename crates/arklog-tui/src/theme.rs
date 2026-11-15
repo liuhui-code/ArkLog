@@ -38,6 +38,7 @@ pub(crate) const SELECTED_ROW_MARKER: &str = "▶ ";
 pub(crate) const UNSELECTED_ROW_MARKER: &str = "  ";
 pub(crate) const MIN_TERMINAL_MESSAGE: &str = "ArkLog needs at least 72 x 16 terminal cells";
 pub(crate) const HORIZONTAL_SCROLL_STEP_CELLS: u64 = 8;
+pub(crate) const MOUSE_SCROLL_ROWS: u64 = 3;
 pub(crate) const LOG_TAB_STOP_CELLS: u64 = 4;
 pub(crate) const LEFT_OVERFLOW_MARKER: &str = "‹";
 pub(crate) const RIGHT_OVERFLOW_MARKER: &str = "›";
@@ -147,6 +148,10 @@ pub(crate) fn panel_content_width(width: u16) -> usize {
     width.saturating_sub(PANEL_HORIZONTAL_BORDER_CELLS) as usize
 }
 
+pub(crate) fn panel_content_area(area: Rect) -> Rect {
+    panel("").inner(area)
+}
+
 pub(crate) fn input_cursor_limit(width: usize) -> usize {
     width.saturating_sub(INPUT_CURSOR_RESERVE)
 }
@@ -189,6 +194,7 @@ pub(crate) fn log_span(
     current_match_line: bool,
     find_match: bool,
     filter_match: bool,
+    selected: bool,
 ) -> Style {
     let mut style = Style::new().fg(TEXT);
     if current_match_line {
@@ -208,7 +214,15 @@ pub(crate) fn log_span(
         style = style.fg(MAUVE).add_modifier(Modifier::UNDERLINED);
     }
     if filter_match {
-        style = style.fg(BASE).bg(YELLOW).add_modifier(Modifier::BOLD);
+        style = if selected {
+            style.fg(YELLOW)
+        } else {
+            style.fg(BASE).bg(YELLOW)
+        }
+        .add_modifier(Modifier::BOLD);
+    }
+    if selected {
+        style = style.bg(SURFACE_0);
     }
     style
 }
