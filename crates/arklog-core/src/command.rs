@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::{spawn_command, terminate_process_tree, ManagedChild};
+
 #[derive(Clone, Copy, Debug)]
 pub struct CommandPolicy {
     timeout: Duration,
@@ -74,14 +76,13 @@ fn run_command(
     policy: CommandPolicy,
 ) -> Result<CommandOutput, String> {
     let mut command = Command::new(program);
-    configure_hidden_command(&mut command);
-    let mut child = command
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("Failed to run {program}: {error}"))?;
+        .stderr(Stdio::piped());
+    let mut child =
+        spawn_command(&mut command).map_err(|error| format!("Failed to run {program}: {error}"))?;
     let stdout = child
         .stdout
         .take()
@@ -94,12 +95,12 @@ fn run_command(
     let stdout_reader = spawn_bounded_reader(stdout, Arc::clone(&used), policy.max_output_bytes);
     let stderr_reader = spawn_bounded_reader(stderr, Arc::clone(&used), policy.max_output_bytes);
     let deadline = Instant::now() + policy.timeout;
+    let mut exit_status = None;
     let status = loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("Failed to inspect {program}: {error}"))?
-        {
-            break status;
+        if exit_status.is_none() {
+            exit_status = child
+                .try_wait()
+                .map_err(|error| format!("Failed to inspect {program}: {error}"))?;
         }
         if used.load(Ordering::Relaxed) > policy.max_output_bytes {
             terminate_child(program, &mut child, stdout_reader, stderr_reader)?;
@@ -107,6 +108,11 @@ fn run_command(
                 "Command output exceeded {} bytes",
                 policy.max_output_bytes
             ));
+        }
+        if let Some(status) = exit_status {
+            if stdout_reader.is_finished() && stderr_reader.is_finished() {
+                break status;
+            }
         }
         if Instant::now() >= deadline {
             terminate_child(program, &mut child, stdout_reader, stderr_reader)?;
@@ -128,7 +134,7 @@ fn run_command(
 
 fn terminate_child(
     program: &str,
-    child: &mut std::process::Child,
+    child: &mut ManagedChild,
     stdout_reader: thread::JoinHandle<Result<Vec<u8>, String>>,
     stderr_reader: thread::JoinHandle<Result<Vec<u8>, String>>,
 ) -> Result<(), String> {
@@ -171,32 +177,4 @@ fn join_reader(reader: thread::JoinHandle<Result<Vec<u8>, String>>) -> Result<Ve
     reader
         .join()
         .map_err(|_| "Command output reader panicked".to_string())?
-}
-
-pub(crate) fn configure_hidden_command(command: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    #[cfg(not(any(unix, windows)))]
-    let _ = command;
-}
-
-pub(crate) fn terminate_process_tree(child: &mut std::process::Child) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        let process_group = -(child.id() as i32);
-        let status = unsafe { libc::kill(process_group, libc::SIGKILL) };
-        if status == 0 {
-            return Ok(());
-        }
-    }
-    child.kill()
 }

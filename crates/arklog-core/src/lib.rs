@@ -4,6 +4,7 @@ use serde::Serialize;
 
 mod command;
 mod fault_log;
+mod process;
 mod runtime;
 mod stream;
 
@@ -210,5 +211,5 @@ fn parse_phone_code(output: &[u8]) -> Option<String> {
     })
 }
 
-pub(crate) use command::{configure_hidden_command, terminate_process_tree};
 pub use command::{CommandOutput, CommandPolicy, CommandRunner, SystemCommandRunner};
+pub(crate) use process::{spawn_command, terminate_process_tree, ManagedChild};

@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use serde::Serialize;
 
-use crate::{configure_hidden_command, spawn_log_reader, terminate_process_tree, LogBatchSink};
+use crate::{spawn_command, spawn_log_reader, terminate_process_tree, LogBatchSink, ManagedChild};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -57,7 +57,7 @@ pub struct DeviceLogRuntime {
 }
 
 struct ActiveStream {
-    child: Child,
+    child: ManagedChild,
     worker: JoinHandle<()>,
 }
 
@@ -102,16 +102,14 @@ impl DeviceLogRuntime {
             self.next_stream_id.fetch_add(1, Ordering::Relaxed)
         );
         let mut command = Command::new(&self.executable);
-        configure_hidden_command(&mut command);
-        let mut child = command
+        command
             .args(["-t", device_id, "hilog", "-v", "epoch"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| {
-                DeviceLogStartError::Launch(format!("Failed to start HDC HiLog: {error}"))
-            })?;
+            .stderr(Stdio::null());
+        let mut child = spawn_command(&mut command).map_err(|error| {
+            DeviceLogStartError::Launch(format!("Failed to start HDC HiLog: {error}"))
+        })?;
         let stdout = child.stdout.take().ok_or_else(|| {
             DeviceLogStartError::Launch("HDC HiLog stdout was unavailable".to_string())
         })?;
@@ -170,6 +168,13 @@ impl DeviceLogRuntime {
             .streams
             .lock()
             .map_err(|_| "Device log runtime lock was poisoned".to_string())?;
+        let stream = streams
+            .get_mut(stream_id)
+            .ok_or_else(|| format!("Unknown device log stream: {stream_id}"))?;
+        // An exited parent can leave descendants holding stdout open. Close
+        // those writers before joining the reader so recovery can complete.
+        terminate_process_tree(&mut stream.child)
+            .map_err(|error| format!("Failed to clean up HDC HiLog: {error}"))?;
         let stream = streams
             .remove(stream_id)
             .ok_or_else(|| format!("Unknown device log stream: {stream_id}"))?;

@@ -594,6 +594,157 @@ fn cached_online_device_reconnects_when_post_disconnect_discovery_fails() {
 }
 
 #[test]
+fn stop_then_start_recovers_after_discovery_leaves_an_inherited_pipe_open() {
+    let devices = vec![DeviceLogDevice {
+        id: "USB-01".to_string(),
+        label: "USB-01".to_string(),
+        status: "online".to_string(),
+        detail: "USB-01 Connected".to_string(),
+    }];
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/inherited-discovery-pipe-hdc.sh");
+    let mut controller = ArkLogController::new(fixture.to_string_lossy(), devices).unwrap();
+    controller.start_stream().unwrap();
+    let first_stream = controller.active_stream_id().unwrap().to_string();
+    controller.request_device_refresh().unwrap();
+    controller.toggle_stream().unwrap();
+    controller.toggle_stream().unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        controller.pump_log_batches().unwrap();
+        // The discovery timeout is expected; it must release the start fence.
+        let _ = controller.pump_background_tasks();
+        if controller
+            .active_stream_id()
+            .is_some_and(|id| id != first_stream)
+            && controller.state().raw_count() > 0
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    assert_eq!(controller.selected_device().unwrap().status, "online");
+    assert!(
+        controller.stream_is_live(),
+        "{:?}",
+        controller.stream_state()
+    );
+    assert_ne!(controller.active_stream_id(), Some(first_stream.as_str()));
+    assert_eq!(
+        controller.state_mut().visible_window(10).unwrap(),
+        ["connected-log"]
+    );
+    controller.stop_stream().unwrap();
+}
+
+#[test]
+fn online_device_can_restart_when_exited_hdc_leaves_stdout_open() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = std::env::temp_dir().join(format!("arklog-orphan-hdc-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("fixture directory");
+    let executable = directory.join("hdc.sh");
+    let marker = directory.join("hdc.sh.started");
+    let _ = std::fs::remove_file(&marker);
+    std::fs::write(
+        &executable,
+        r#"#!/bin/sh
+if [ "$1 $2 $3" = "list targets -v" ]; then
+  printf 'USB-ORPHAN\tConnected\n'
+  exit 0
+fi
+if [ ! -f "$0.started" ]; then
+  : > "$0.started"
+  printf 'before-disconnect\n'
+  sleep 10 &
+  exit 7
+fi
+printf 'after-reconnect\n'
+exec sleep 30
+"#,
+    )
+    .expect("write fixture");
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+        .expect("executable fixture");
+    let runtime = Arc::new(DeviceLogRuntime::new(executable.to_string_lossy()));
+    let devices = vec![DeviceLogDevice {
+        id: "USB-ORPHAN".to_string(),
+        label: "USB-ORPHAN".to_string(),
+        status: "online".to_string(),
+        detail: "USB-ORPHAN Connected".to_string(),
+    }];
+    let mut controller =
+        ArkLogController::with_runtime(executable.to_string_lossy(), devices, runtime.clone())
+            .expect("controller");
+    controller.start_stream().expect("start first stream");
+    let first_stream = controller
+        .active_stream_id()
+        .expect("first stream")
+        .to_string();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while runtime
+        .finished_stream_status(&first_stream)
+        .expect("inspect exit")
+        .is_none()
+    {
+        assert!(Instant::now() < deadline, "parent did not exit");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    controller
+        .pump_background_tasks()
+        .expect("begin background reap");
+    controller.request_device_refresh().expect("Ctrl+R");
+    controller.toggle_stream().expect("Ctrl+S stop");
+    controller.toggle_stream().expect("Ctrl+S start");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        controller.pump_log_batches().expect("drain logs");
+        controller
+            .pump_background_tasks()
+            .expect("advance recovery");
+        if controller
+            .active_stream_id()
+            .is_some_and(|id| id != first_stream)
+            && controller.state().raw_count() > 0
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let recovered = controller
+        .active_stream_id()
+        .is_some_and(|id| id != first_stream)
+        && controller.stream_is_live()
+        && controller
+            .state_mut()
+            .visible_window(10)
+            .expect("reconnected logs")
+            .iter()
+            .any(|line| line == "after-reconnect");
+    assert_eq!(
+        controller.selected_device().expect("online device").status,
+        "online"
+    );
+    // Finish fixture cleanup even on the failing implementation.
+    controller.request_stream_stopped();
+    let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+    while controller.stream_state() != &arklog::StreamState::Stopped
+        && Instant::now() < cleanup_deadline
+    {
+        controller.pump_log_batches().expect("drain cleanup logs");
+        controller.pump_background_tasks().expect("finish cleanup");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::fs::remove_dir_all(directory).expect("cleanup fixture");
+    assert!(
+        recovered,
+        "online device remained blocked by the old stream reap"
+    );
+}
+
+#[test]
 fn quiet_but_healthy_stream_is_not_reconnected() {
     let devices = vec![DeviceLogDevice {
         id: "USB-01".to_string(),

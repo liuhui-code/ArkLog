@@ -2,6 +2,31 @@
 
 Parent state: new repository with no history. ArkLine reference revision: `e8e91334ecc71db172be01d623c79cafb731987d`.
 
+## Windows disconnect and reconnect lifecycle
+
+The reported symptom is an online device snapshot with HiLog stuck in STOPPED
+or STOPPING after disconnect. Two independently blocking paths are covered:
+
+- `command_lifecycle::deadline_covers_output_pipes_after_the_parent_exits` was
+  RED: a two-second command deadline waited over eight seconds for inherited
+  pipes after the parent exited. It is GREEN when the deadline also covers the
+  stdout/stderr readers.
+- `controller_stream::stop_then_start_recovers_after_discovery_leaves_an_inherited_pipe_open`
+  was RED: Ctrl+R followed by Stop/Start left a cached online device STOPPED
+  beyond five seconds. It is GREEN: the three-second discovery timeout releases
+  the refresh fence, and a replacement stream delivers `connected-log`.
+- The shell-independent `process_lifecycle` executable exercises both Stop of
+  a live parent and reap of an exited parent while descendants inherit stdout.
+  Windows launches the parent suspended, assigns it to a Job Object, then
+  resumes it; Stop, timeout and reap terminate that job. Normal successful
+  command completion closes the job handle without killing background services.
+
+The RED/GREEN executions above were performed on macOS. Windows code and all
+test targets are checked with
+`cargo check -p arklog --tests --target x86_64-pc-windows-msvc`.
+Native Windows execution and physical-device reconnect verification remain
+necessary; cross-compilation is not evidence of a successful Windows run.
+
 ## Tokenized compact Ratatui workspace
 
 Specification: `docs/specs/terminal-visual-theme.md`.
