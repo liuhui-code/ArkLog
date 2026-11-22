@@ -1,7 +1,33 @@
-use arklog::{Clipboard, QueryHistory, TextInput};
+use arklog::{Clipboard, QueryHistory, TextInput, TextInputView};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 struct NoClipboard;
+
+#[test]
+fn suggests_the_most_recent_literal_prefix_without_mutating_history_or_input() {
+    let mut history = QueryHistory::new();
+    history.record_applied("error|timeout");
+    history.record_applied("error|failure");
+    history.record_applied("[App]中文");
+    assert_eq!(
+        history.suggestion(TextInputView::at_end("err")),
+        Some("or|failure")
+    );
+    assert_eq!(
+        history.suggestion(TextInputView::at_end("[App]")),
+        Some("中文")
+    );
+    assert_eq!(history.suggestion(TextInputView::at_end("Error")), None);
+    assert_eq!(history.suggestion(TextInputView::at_end("")), None);
+    assert_eq!(history.suggestion(TextInputView::at_end("[App]中文")), None);
+    let mut middle = TextInputView::at_end("error");
+    middle.cursor = 2;
+    assert_eq!(history.suggestion(middle), None);
+    let mut selected = TextInputView::at_end("error");
+    selected.selection = Some((0, 5));
+    assert_eq!(history.suggestion(selected), None);
+    assert_eq!(history.older("draft"), Some("[App]中文".into()));
+}
 
 impl Clipboard for NoClipboard {
     fn get_text(&mut self) -> Result<String, String> {

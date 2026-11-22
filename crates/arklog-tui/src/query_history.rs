@@ -1,4 +1,8 @@
 use crate::text_input::MAX_INPUT_BYTES;
+use crate::TextInputView;
+
+#[path = "query_history_store.rs"]
+mod store;
 
 const QUERY_HISTORY_LIMIT: usize = 50;
 
@@ -32,6 +36,17 @@ impl QueryHistory {
         self.entries.push(query.to_string());
         self.cancel_navigation();
         true
+    }
+
+    pub fn suggestion(&self, input: TextInputView<'_>) -> Option<&str> {
+        if input.text.is_empty() || input.cursor != input.text.len() || input.selection.is_some() {
+            return None;
+        }
+        self.entries.iter().rev().find_map(|entry| {
+            entry
+                .strip_prefix(input.text)
+                .filter(|suffix| !suffix.is_empty())
+        })
     }
 
     pub fn older(&mut self, current: &str) -> Option<String> {

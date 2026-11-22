@@ -12,6 +12,7 @@ pub struct TextInputView<'a> {
     pub text: &'a str,
     pub cursor: usize,
     pub selection: Option<(usize, usize)>,
+    pub suggestion: Option<&'a str>,
 }
 
 impl<'a> TextInputView<'a> {
@@ -20,6 +21,7 @@ impl<'a> TextInputView<'a> {
             text,
             cursor: text.len(),
             selection: None,
+            suggestion: None,
         }
     }
 }
@@ -65,6 +67,7 @@ impl TextInput {
             text: &self.text,
             cursor: self.cursor,
             selection: self.selection(),
+            suggestion: None,
         }
     }
 

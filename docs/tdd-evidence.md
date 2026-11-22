@@ -813,3 +813,48 @@ focused release workflow suite then passed. Final `pnpm test` and
 `cargo test --workspace` each passed all 189 tests; `pnpm build`,
 `cargo check -p arklog`, formatting and diff checks passed. The v0.2.12 release
 memory probe passed at 13,053,952 bytes peak RSS for 100,000 records.
+
+## Regex input suggestions and persistent history (2026-11-22)
+
+RED → GREEN slices:
+
+- A public source-limit regression failed for the existing 932-line terminal
+  entry point and 650-line renderer. Split application dispatch, actions,
+  tests and log-line rendering by responsibility; existing input/render tests
+  remain green. Every production module changed for this feature is at most
+  500 lines, enforced by `tests/source_limits.rs`.
+- History-prefix tests initially lacked a suggestion API. Added reverse-recency,
+  literal, case-sensitive lookup with no suggestions for empty input, a cursor
+  away from the end or an active selection. Looking up a suggestion neither
+  changes the draft nor navigates history.
+- Render and application tests initially lacked ghost-text and acceptance
+  interfaces. Added semantic muted styling, grapheme-safe clipping, an unchanged
+  cursor position and a filter-only Tab acceptance path. Enter applies only the
+  real draft; acceptance is one undoable edit and history arrows retain drafts.
+- File round-trip and oversized-input regressions drove bounded JSON loading,
+  the existing 50-entry/4-KiB limits, control-character rejection and same-directory
+  temporary-file replacement. Failed saves retain the destination and remove
+  temporary files. Missing files start empty and malformed files report errors.
+- Application tests verify persistence only after successful filter application,
+  restoration without automatically applying a filter, and nonfatal recovery
+  from damaged history. Only regex source strings are persisted.
+
+Final macOS verification: `pnpm test` and `cargo test --workspace` each passed
+all 204 tests. `pnpm build`, `cargo check -p arklog`, formatting and diff checks
+passed. A real release-binary PTY test verified persisted history across restart,
+visible ghost text, Enter without implicit acceptance, Tab acceptance and clean
+exit, restoring the original user history file afterward. The first harness run
+sent input before terminal initialization; waiting for mouse-reporting setup
+made the complete replay pass. `pnpm memory:check` passed 100,000 records at
+13,209,600 bytes peak RSS against the 52,428,800-byte budget.
+
+## v0.2.13 release verification (2026-11-22)
+
+Updated the public package-version regression to require 0.2.13 and observed
+RED against 0.2.12 before updating the Rust and package metadata. The focused
+release workflow suite then passed all four tests. Final `pnpm test` and
+`cargo test --workspace` each passed all 204 tests; `pnpm build`,
+`cargo check -p arklog`, formatting and diff checks passed. The first sandboxed
+test run could not bind the MCP loopback port; all required checks passed when
+rerun with local port access. The release memory probe passed 100,000 records
+at 13,062,144 bytes peak RSS against the 52,428,800-byte budget.

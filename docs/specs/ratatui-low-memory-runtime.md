@@ -83,11 +83,20 @@ without bound.
     source record may occupy multiple display rows but retains one identity and
     count. Vertical scrolling, resize, Find, mode changes, and follow-latest use
     one `(record, source-cell)` content anchor and materialize only visible rows.
-21. The process keeps the 50 most recent successfully applied non-empty regex
+21. ArkLog keeps the 50 most recent successfully applied non-empty regex
     source strings. Exact duplicates move to newest. Filter-editor Up/Down
     browse without applying and restore the draft past the newest item. Clear,
-    device replacement, and reconnect retain this input history; process exit
-    discards it. No query result or compiled Regex is retained per history item.
+    device replacement, and reconnect retain this input history. Only regex
+    source strings are atomically saved to the user's configuration directory
+    after successful application and restored at startup; the restored history
+    does not enable a filter. Input/file sizes are bounded, malformed files and
+    I/O failures are nonfatal, and failed saves leave the old file intact.
+    No query result, draft or compiled Regex is persisted per history item.
+    While editing Filter, a nonempty draft with its cursor at the end and no
+    selection previews the suffix of the most recently used strict prefix match
+    in muted text. Matching is literal and case-sensitive. Tab accepts the suffix
+    as one undoable edit, without applying it. Enter applies only actual input.
+    Find and device overlays do not show or accept these suggestions.
 22. UTF-8 byte ranges, grapheme boundaries, and terminal cell columns remain
     distinct. Tabs expand only for display at a four-cell tab stop. Overflow
     and continuation markers never enter matching, storage, or raw copying.
@@ -118,7 +127,7 @@ without bound.
   incremental indexing, bounded window reads, and clear-on-drop cleanup.
 - `ArkLogController` owns device selection, HDC jobs, stream truth, and bounded
   batch delivery. `ArkLogState` owns the single viewport content anchor and
-  process-lifetime regex input history. `TerminalApp` owns input modes, event
+  bounded regex input history. `TerminalApp` owns input modes, history persistence, event
   dispatch, and redraw scheduling.
 - `ui` renders immutable view data with Ratatui and performs no HDC or file I/O.
 

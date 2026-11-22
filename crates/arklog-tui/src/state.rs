@@ -119,6 +119,19 @@ impl ArkLogState {
         self.filter_history.older(current)
     }
 
+    pub fn filter_suggestion(&self, input: crate::TextInputView<'_>) -> Option<&str> {
+        self.filter_history.suggestion(input)
+    }
+
+    pub fn load_filter_history(&mut self, path: &std::path::Path) -> io::Result<()> {
+        self.filter_history = QueryHistory::load(path)?;
+        Ok(())
+    }
+
+    pub fn save_filter_history(&self, path: &std::path::Path) -> io::Result<()> {
+        self.filter_history.save(path)
+    }
+
     pub fn newer_filter_query(&mut self, current: &str) -> Option<String> {
         self.filter_history.newer(current)
     }

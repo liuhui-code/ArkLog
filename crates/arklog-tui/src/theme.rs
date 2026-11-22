@@ -233,3 +233,7 @@ pub(crate) fn input_selection(tone: Tone) -> Style {
         .bg(tone_color(tone))
         .add_modifier(Modifier::BOLD)
 }
+
+pub(crate) fn input_suggestion() -> Style {
+    text(Tone::Muted)
+}

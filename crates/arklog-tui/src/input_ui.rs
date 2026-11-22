@@ -4,7 +4,8 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{theme, TextInputView};
 
@@ -17,10 +18,23 @@ pub(crate) fn render_text_input(
 ) {
     let width = theme::input_content_width(area);
     let (visible, cursor_column) = visible_window(input, width);
-    frame.render_widget(
-        Paragraph::new(styled_input(visible, tone)).block(theme::panel(title)),
-        area,
-    );
+    let mut line = styled_input(visible, tone);
+    if input.cursor == input.text.len() && input.selection.is_none() {
+        let available = width.saturating_sub(UnicodeWidthStr::width(visible.text));
+        let mut used = 0;
+        let hint = input
+            .suggestion
+            .unwrap_or("")
+            .graphemes(true)
+            .take_while(|grapheme| {
+                used += UnicodeWidthStr::width(*grapheme);
+                used <= available
+            })
+            .collect::<String>();
+        line.spans
+            .push(Span::styled(hint, theme::input_suggestion()));
+    }
+    frame.render_widget(Paragraph::new(line).block(theme::panel(title)), area);
     frame.set_cursor_position(theme::input_cursor_position(area, cursor_column, width));
 }
 
@@ -60,6 +74,7 @@ fn visible_window(input: TextInputView<'_>, width: usize) -> (TextInputView<'_>,
             text: &input.text[start..end],
             cursor: input.cursor - start,
             selection,
+            suggestion: input.suggestion,
         },
         cursor_column,
     )
