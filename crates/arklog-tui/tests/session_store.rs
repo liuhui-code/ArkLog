@@ -1,6 +1,167 @@
 use arklog::SessionLogStore;
 
 #[test]
+fn logcat_level_prefix_filters_existing_and_later_lines_by_minimum_severity() {
+    let mut store = SessionLogStore::new().unwrap();
+    store
+        .append_lines([
+            "0 V verbose",
+            "1 D debug",
+            "2 I message mentions E and F",
+            "3 W warning",
+            "4 E error",
+            "5 F fatal",
+            "6 X unknown",
+            "unstructured ERROR message",
+        ])
+        .unwrap();
+
+    store.set_filter("level:WARN").unwrap();
+    store
+        .append_lines(["7 I later info", "8 E later error"])
+        .unwrap();
+
+    assert_eq!(store.raw_count(), 10);
+    assert_eq!(
+        store.visible_window(0, 20).unwrap(),
+        ["3 W warning", "4 E error", "5 F fatal", "8 E later error"]
+    );
+    store.set_filter("").unwrap();
+    assert_eq!(store.visible_count(), 10);
+}
+
+#[test]
+fn logcat_level_names_are_case_insensitive_and_assert_maps_to_hilog_fatal() {
+    let lines = [
+        "0 V verbose",
+        "1 D debug",
+        "2 I info",
+        "3 W warn",
+        "4 E error",
+        "5 F fatal",
+    ];
+    let mut store = SessionLogStore::new().unwrap();
+    store.append_lines(lines).unwrap();
+    for (level, start) in [
+        ("verbose", 0),
+        ("DeBuG", 1),
+        ("INFO", 2),
+        ("warn", 3),
+        ("ERROR", 4),
+        ("fatal", 5),
+        ("ASSERT", 5),
+    ] {
+        store.set_filter(&format!("level:{level}")).unwrap();
+        assert_eq!(
+            store.visible_window(0, 10).unwrap(),
+            lines[start..],
+            "{level}"
+        );
+    }
+}
+
+#[test]
+fn level_and_regex_share_one_rebuild_and_find_only_sees_visible_records() {
+    let mut store = SessionLogStore::new().unwrap();
+    store
+        .append_lines(["0 I needle", "1 W Needle", "2 E other", "3 F needle"])
+        .unwrap();
+    store.set_find("needle").unwrap();
+    store
+        .set_filter("level:WARN (?i)^\\d [WEF] needle$")
+        .unwrap();
+    assert_eq!(
+        store.visible_window(0, 10).unwrap(),
+        ["1 W Needle", "3 F needle"]
+    );
+    assert_eq!(store.find_count(), 2);
+    assert_eq!(store.last_rebuild_work().raw_records_scanned, 4);
+
+    store
+        .set_filter("level:ERROR (?i)^\\d [WEF] needle$")
+        .unwrap();
+    assert_eq!(store.visible_window(0, 10).unwrap(), ["3 F needle"]);
+    assert_eq!(store.find_count(), 1);
+    store
+        .set_filter("level:ERROR (?i)^\\d [WEF] needle$")
+        .unwrap();
+    assert_eq!(store.last_rebuild_work().raw_records_scanned, 0);
+    store.append_lines(["4 W needle", "5 E needle"]).unwrap();
+    assert_eq!(store.last_rebuild_work().raw_records_scanned, 0);
+    assert_eq!(store.find_count(), 2);
+
+    store.clear().unwrap();
+    store.append_lines(["6 I needle", "7 E needle"]).unwrap();
+    assert_eq!(store.visible_window(0, 10).unwrap(), ["7 E needle"]);
+    assert_eq!(store.find_count(), 1);
+}
+
+#[test]
+fn level_filter_uses_the_same_hilog_layouts_as_level_coloring() {
+    let lines = [
+        "08-31 20:10:01.001 120 120 W ArkUI/App warning",
+        "42 08-31 20:10:01.001 120 120 E ArkUI/App error",
+        "1793527201.001 120 120 F ArkUI/App fatal",
+        "43 W compact warning",
+        "08-31 20:10:01.001 120 120 I ArkUI/App W E F in message",
+        "1793527201.001 120 120 X ArkUI/App W in message",
+    ];
+    let mut store = SessionLogStore::new().unwrap();
+    store.append_lines(lines).unwrap();
+    store.set_filter("level:WARN").unwrap();
+    assert_eq!(store.visible_window(0, 10).unwrap(), lines[..4]);
+}
+
+#[test]
+fn invalid_level_queries_hide_matches_and_recover_without_losing_raw_records() {
+    let mut store = SessionLogStore::new().unwrap();
+    store.append_lines(["0 I info", "1 E error"]).unwrap();
+    for query in [
+        "level:",
+        "level:TYPO",
+        "level:W+",
+        "level:E,F",
+        "level:WARN (",
+    ] {
+        store.set_filter("level:ERROR").unwrap();
+        assert!(store.set_filter(query).is_err(), "{query}");
+        assert_eq!(store.visible_count(), 0);
+        assert_eq!(store.find_count(), 0);
+    }
+    store.append_lines(["2 F later fatal"]).unwrap();
+    assert_eq!(store.visible_count(), 0);
+    store.set_filter("level:ERROR").unwrap();
+    assert_eq!(
+        store.visible_window(0, 10).unwrap(),
+        ["1 E error", "2 F later fatal"]
+    );
+    store.set_filter("").unwrap();
+    assert_eq!(store.visible_count(), 3);
+    assert_eq!(store.raw_count(), 3);
+}
+
+#[test]
+fn regex_can_search_literal_level_text_and_keep_its_leading_whitespace() {
+    let mut store = SessionLogStore::new().unwrap();
+    store
+        .append_lines([
+            "level:WARN message",
+            "  level:WARN indented",
+            "0 E level:WARN tag",
+        ])
+        .unwrap();
+    for query in [r"level\:WARN", "(?:level:WARN)"] {
+        store.set_filter(query).unwrap();
+        assert_eq!(store.visible_count(), 3);
+    }
+    store.set_filter("  level:WARN").unwrap();
+    assert_eq!(
+        store.visible_window(0, 10).unwrap(),
+        ["  level:WARN indented"]
+    );
+}
+
+#[test]
 fn stores_a_large_session_without_retaining_log_text_on_the_heap() {
     let mut store = SessionLogStore::new().expect("session store");
     store

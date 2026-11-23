@@ -1,3 +1,5 @@
+use crate::log_level::LogLevel;
+
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -37,6 +39,7 @@ pub(crate) const DEVICE_FIELD_GAP: &str = "  ";
 pub(crate) const SELECTED_ROW_MARKER: &str = "▶ ";
 pub(crate) const UNSELECTED_ROW_MARKER: &str = "  ";
 pub(crate) const MIN_TERMINAL_MESSAGE: &str = "ArkLog needs at least 72 x 16 terminal cells";
+pub(crate) const FILTER_INPUT_HINT: &str = "Regex · level:WARN";
 pub(crate) const HORIZONTAL_SCROLL_STEP_CELLS: u64 = 8;
 pub(crate) const MOUSE_SCROLL_ROWS: u64 = 3;
 pub(crate) const LOG_TAB_STOP_CELLS: u64 = 4;
@@ -163,30 +166,6 @@ pub(crate) fn input_cursor_position(area: Rect, cursor_column: usize, width: usi
         ),
         area.y + PANEL_CONTENT_OFFSET,
     )
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum LogLevel {
-    Fatal,
-    Error,
-    Warning,
-    Info,
-    Debug,
-    Verbose,
-}
-
-impl LogLevel {
-    pub(crate) fn parse(field: &str) -> Option<Self> {
-        match field {
-            "F" => Some(Self::Fatal),
-            "E" => Some(Self::Error),
-            "W" => Some(Self::Warning),
-            "I" => Some(Self::Info),
-            "D" => Some(Self::Debug),
-            "V" => Some(Self::Verbose),
-            _ => None,
-        }
-    }
 }
 
 pub(crate) fn log_span(

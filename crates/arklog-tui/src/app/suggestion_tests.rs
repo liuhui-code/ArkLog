@@ -100,3 +100,78 @@ fn damaged_history_is_nonfatal_and_a_successful_apply_can_repair_it() {
     assert!(arklog::QueryHistory::load(&path).is_ok());
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn level_queries_use_existing_apply_history_and_tab_completion_without_accepting_the_hint() {
+    let controller = ArkLogController::new("unused-hdc", vec![]).unwrap();
+    let mut app = TerminalApp::new(controller, None, None);
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+    assert_eq!(app.input_view().suggestion, None);
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.input.text(), "");
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.controller.state().filter_query(), "");
+    assert!(app.action_status.error().is_none());
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+    app.controller
+        .state_mut()
+        .append_lines(["0 I timeout", "1 W Timeout", "2 F unrelated"])
+        .unwrap();
+    app.input = TextInput::new("level:WARN timeout");
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.action_status.error().is_none());
+    assert_eq!(
+        app.controller.state_mut().visible_window(10).unwrap(),
+        ["1 W Timeout"]
+    );
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+    app.input = TextInput::new("level:W");
+    assert_eq!(app.input_view().suggestion, Some("ARN timeout"));
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.input.text(), "level:WARN timeout");
+    app.input = TextInput::new("level:TYPO");
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.action_status.error().is_some());
+    assert_eq!(
+        app.controller.state_mut().older_filter_query(""),
+        Some("level:WARN timeout".into())
+    );
+}
+
+#[test]
+fn builtin_level_completion_uses_tab_undo_and_enter_without_history_or_extra_keys() {
+    let controller = ArkLogController::new("unused-hdc", vec![]).unwrap();
+    let mut app = TerminalApp::new(controller, None, None);
+    app.controller
+        .state_mut()
+        .append_lines(["0 I info", "1 W warning"])
+        .unwrap();
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+    app.input = TextInput::new("level:W");
+    assert_eq!(app.input_view().suggestion, Some("ARN"));
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.input.text(), "level:WARN");
+    assert_eq!(app.controller.state().filter_query(), "");
+    assert_eq!(app.controller.state_mut().older_filter_query(""), None);
+    app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+    assert_eq!(app.input.text(), "level:W");
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.controller.state().filter_query(), "level:WARN");
+    assert_eq!(
+        app.controller.state_mut().visible_window(10).unwrap(),
+        ["1 W warning"]
+    );
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+    app.input = TextInput::new("lev");
+    assert_eq!(app.input_view().suggestion, Some("el:WARN"));
+    app.input_mode = arklog::InputMode::Find;
+    assert_eq!(app.input_view().suggestion, None);
+    app.input_mode = arklog::InputMode::Filter;
+    app.overlay = arklog::OverlayMode::Devices;
+    assert_eq!(app.input_view().suggestion, None);
+    app.overlay = arklog::OverlayMode::None;
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.controller.state().filter_query(), "lev");
+}

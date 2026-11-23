@@ -120,7 +120,9 @@ impl ArkLogState {
     }
 
     pub fn filter_suggestion(&self, input: crate::TextInputView<'_>) -> Option<&str> {
-        self.filter_history.suggestion(input)
+        self.filter_history
+            .suggestion(input)
+            .or_else(|| crate::log_level::level_suggestion(input))
     }
 
     pub fn load_filter_history(&mut self, path: &std::path::Path) -> io::Result<()> {

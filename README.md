@@ -206,10 +206,32 @@ Windows 经典控制台运行期间会关闭 Quick Edit，避免鼠标误选文�
 
 普通单字符不会触发命令；在正则和查找输入框中可直接输入文本。
 
-正则历史容量为最近 50 条，每条最多 4 KiB。仅按 `Enter` 成功验证并应用的
+等级过滤复用 `Ctrl+E` 输入框，采用 [Android Studio Logcat](https://developer.android.com/studio/debug/logcat)
+的 `level:WARN` 最低等级语义，不增加控件或快捷键：
+
+```text
+level:WARN                       Warning、Error、Fatal
+level:ERROR timeout|connection    Error/Fatal，且原始行匹配后面的正则
+level:DEBUG                      Debug 及以上
+```
+
+可在输入开头添加一个 `level:` 条件，以空白分隔后续正则；等级值不区分大小写，
+支持 `VERBOSE`、`DEBUG`、`INFO`、`WARN`、`ERROR`、`FATAL`，以及等同 `FATAL` 的
+Logcat 名称 `ASSERT`。没有等级条件时保留原有正则行为，包括显示无法解析等级的行；
+指定等级后仅显示能解析等级且达到阈值的行。等级取自 HiLog 字段，不匹配正文中的等级词。
+只有后续正则的实际命中字符高亮，Find 在过滤后的记录中查找。清空输入恢复全部日志。
+空输入编辑时显示灰色 `Regex · level:WARN` 提示，`Tab` 和 `Enter` 都不会把提示写入输入。
+即使没有使用历史，也预置等级语法补全：`lev` → `level:WARN`、`level:` → `level:WARN`、
+`level:E` → `level:ERROR`，并支持其余等级和不区分大小写的等级前缀。匹配到历史时优先
+显示历史，否则显示预置候选；灰字通过 `Tab` 接受到草稿，可一次撤销，`Enter` 仍只应用
+实际输入。预置候选仅补全开头的等级语法，不进入历史列表，也不会改写后面的正则。
+如需搜索字面量 `level:WARN`，可用 `level\:WARN` 或 `(?:level:WARN)` 避开开头条件解析。
+这里只支持开头的等级条件，其余部分仍为 Rust Regex，不解释 Logcat 的其他字段或逻辑运算。
+
+过滤历史容量为最近 50 条，每条最多 4 KiB（包含可选等级前缀）。仅按 `Enter` 成功验证并应用的
 非空表达式会记录；合法零命中表达式也会记录。表达式按原文精确去重，不会 trim、
 lowercase 或预编译保存。编辑时按最近使用顺序匹配字面量前缀，以灰字预览剩余部分；
-只有光标在末尾且没有选区时才显示，空输入不提示。`Tab` 接受提示到草稿，支持撤销；
+只有光标在末尾且没有选区时才显示，空输入不显示历史候选。`Tab` 接受历史提示到草稿，支持撤销；
 `Enter` 只应用实际草稿，不会自动接受灰字。上下键继续浏览历史并保留当前草稿，
 `Esc` 取消编辑。提示和历史导航都不会自动改变正在生效的过滤条件。
 
@@ -219,7 +241,7 @@ lowercase 或预编译保存。编辑时按最近使用顺序匹配字面量前�
 - macOS：`~/Library/Application Support/ArkLog/regex-history.json`
 - 其他平台：`$XDG_CONFIG_HOME/arklog/regex-history.json`，未设置时使用 `~/.config/arklog/regex-history.json`
 
-文件只保存正则字符串。读取有大小上限，加载时丢弃空值、超长项和控制字符；
+文件只保存完整过滤字符串（含可选等级前缀）。读取有大小上限，加载时丢弃空值、超长项和控制字符；
 损坏或不可读文件会提示错误，仍可正常编辑和过滤。保存失败保留内存历史并提示，
 不会截断旧文件。Clear、设备切换和重连不清除历史；日志、查询结果和草稿不落盘。
 

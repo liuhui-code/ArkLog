@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use regex::{Regex, RegexBuilder};
 
+use crate::log_level::{log_level_field, split_level_prefix, LogLevel};
+
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 const MAX_REGEX_BYTES: usize = 4 * 1024;
 const REGEX_COMPILED_LIMIT: usize = 1024 * 1024;
@@ -40,6 +42,8 @@ pub struct SessionLogStore {
     visible_count: u64,
     find_count: u64,
     filter: Option<Regex>,
+    filter_query: String,
+    minimum_level: Option<LogLevel>,
     filter_valid: bool,
     find_query: String,
     find: Option<Regex>,
@@ -69,6 +73,8 @@ impl SessionLogStore {
             visible_count: 0,
             find_count: 0,
             filter: None,
+            filter_query: String::new(),
+            minimum_level: None,
             filter_valid: true,
             find_query: String::new(),
             find: None,
@@ -107,11 +113,7 @@ impl SessionLogStore {
 
     pub fn set_filter(&mut self, query: &str) -> Result<(), String> {
         self.last_rebuild_work = QueryRebuildWork::default();
-        let unchanged = self.filter_valid
-            && self
-                .filter
-                .as_ref()
-                .map_or(query.is_empty(), |filter| filter.as_str() == query);
+        let unchanged = self.filter_valid && self.filter_query == query;
         if unchanged {
             return Ok(());
         }
@@ -121,10 +123,17 @@ impl SessionLogStore {
                 "Regular expression exceeds {MAX_REGEX_BYTES} bytes"
             ));
         }
-        let filter = if query.is_empty() {
+        let (minimum_level, pattern) = match split_level_prefix(query) {
+            Ok(parts) => parts,
+            Err(error) => {
+                self.invalidate_filter()?;
+                return Err(error);
+            }
+        };
+        let filter = if pattern.is_empty() {
             None
         } else {
-            match RegexBuilder::new(query)
+            match RegexBuilder::new(pattern)
                 .case_insensitive(true)
                 .size_limit(REGEX_COMPILED_LIMIT)
                 .dfa_size_limit(REGEX_COMPILED_LIMIT)
@@ -138,6 +147,8 @@ impl SessionLogStore {
             }
         };
         self.filter = filter;
+        self.filter_query = query.to_string();
+        self.minimum_level = minimum_level;
         self.filter_valid = true;
         self.rebuild_query_indexes()
             .map_err(|error| error.to_string())
@@ -223,6 +234,8 @@ impl SessionLogStore {
     pub fn clear(&mut self) -> io::Result<()> {
         let mut replacement = Self::new()?;
         replacement.filter = self.filter.clone();
+        replacement.filter_query.clone_from(&self.filter_query);
+        replacement.minimum_level = self.minimum_level;
         replacement.filter_valid = self.filter_valid;
         replacement.find_query.clone_from(&self.find_query);
         replacement.find.clone_from(&self.find);
@@ -235,6 +248,7 @@ impl SessionLogStore {
         std::mem::size_of::<Self>()
             + self.directory.0.to_string_lossy().len()
             + self.find_query.capacity()
+            + self.filter_query.capacity()
             + self.filter.as_ref().map_or(0, |_| REGEX_COMPILED_LIMIT)
             + self.find.as_ref().map_or(0, |_| FIND_COMPILED_LIMIT)
             + self.data_writer.as_ref().map_or(0, BufWriter::capacity)
@@ -287,6 +301,7 @@ impl SessionLogStore {
         self.flush()?;
         let filter = self.filter.clone();
         let filter_valid = self.filter_valid;
+        let minimum_level = self.minimum_level;
         let find = self.find.clone();
         let visible_writer = self
             .visible_index_writer
@@ -305,7 +320,7 @@ impl SessionLogStore {
         let mut data_reader = BufReader::with_capacity(64 * 1024, data_reader);
         for raw_index in 0..self.raw_count {
             let line = read_next_record(&mut data_reader)?;
-            if filter_valid && filter.as_ref().is_none_or(|filter| filter.is_match(&line)) {
+            if line_matches_filter(&line, filter_valid, minimum_level, filter.as_ref()) {
                 append_u64(visible_writer, raw_index)?;
                 if find.as_ref().is_some_and(|find| find.is_match(&line)) {
                     append_u64(find_writer, visible_count)?;
@@ -342,11 +357,12 @@ impl SessionLogStore {
     }
 
     fn filter_matches(&self, line: &str) -> bool {
-        self.filter_valid
-            && self
-                .filter
-                .as_ref()
-                .is_none_or(|filter| filter.is_match(line))
+        line_matches_filter(
+            line,
+            self.filter_valid,
+            self.minimum_level,
+            self.filter.as_ref(),
+        )
     }
 
     fn find_matches(&self, line: &str) -> bool {
@@ -437,6 +453,18 @@ impl Drop for SessionLogStore {
         drop(self.find_index_writer.take());
         drop(self.find_index_reader.take());
     }
+}
+
+fn line_matches_filter(
+    line: &str,
+    valid: bool,
+    minimum_level: Option<LogLevel>,
+    regex: Option<&Regex>,
+) -> bool {
+    valid
+        && minimum_level
+            .is_none_or(|minimum| log_level_field(line).is_some_and(|(_, level)| level >= minimum))
+        && regex.is_none_or(|regex| regex.is_match(line))
 }
 
 fn create_session_directory() -> io::Result<PathBuf> {

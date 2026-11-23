@@ -1,6 +1,77 @@
 use arklog::{ArkLogState, LogTab};
 
 #[test]
+fn filter_suggests_level_syntax_without_history() {
+    use arklog::TextInputView;
+    let mut state = ArkLogState::new().unwrap();
+    for (draft, suffix) in [
+        ("lev", "el:WARN"),
+        ("level:", "WARN"),
+        ("level:W", "ARN"),
+        ("level:E", "RROR"),
+        ("level:I", "NFO"),
+        ("level:D", "EBUG"),
+        ("level:V", "ERBOSE"),
+        ("level:F", "ATAL"),
+        ("level:A", "SSERT"),
+        ("level:wa", "RN"),
+    ] {
+        assert_eq!(
+            state.filter_suggestion(TextInputView::at_end(draft)),
+            Some(suffix),
+            "{draft}"
+        );
+    }
+    assert_eq!(state.older_filter_query("draft"), None);
+    assert_eq!(state.filter_query(), "");
+}
+
+#[test]
+fn filter_completion_prioritizes_history_and_only_completes_a_leading_level_draft() {
+    use arklog::TextInputView;
+    let mut state = ArkLogState::new().unwrap();
+    state.apply_filter("level:ERROR timeout").unwrap();
+    assert_eq!(
+        state.filter_suggestion(TextInputView::at_end("level:")),
+        Some("ERROR timeout")
+    );
+    assert_eq!(
+        state.filter_suggestion(TextInputView::at_end("level:W")),
+        Some("ARN")
+    );
+    for draft in [
+        "",
+        "level:WARN",
+        "level:warn",
+        "level:WARN timeout",
+        "level:TYPO",
+        "level:中",
+        " level:W",
+        "LEVEL:W",
+        "foo level:W",
+        r"level\:W",
+        "(?:level:W)",
+    ] {
+        assert_eq!(
+            state.filter_suggestion(TextInputView::at_end(draft)),
+            None,
+            "{draft}"
+        );
+    }
+    let mut input = TextInputView::at_end("level:W");
+    input.cursor = 2;
+    assert_eq!(state.filter_suggestion(input), None);
+    input.cursor = input.text.len();
+    input.selection = Some((0, input.text.len()));
+    assert_eq!(state.filter_suggestion(input), None);
+    assert_eq!(
+        state.older_filter_query(""),
+        Some("level:ERROR timeout".into())
+    );
+    assert_eq!(state.older_filter_query("level:ERROR timeout"), None);
+}
+
+#[test]
 fn scrolling_keeps_its_anchor_until_follow_latest_resumes() {
     let mut state = ArkLogState::new().expect("state");
     state

@@ -848,6 +848,48 @@ sent input before terminal initialization; waiting for mouse-reporting setup
 made the complete replay pass. `pnpm memory:check` passed 100,000 records at
 13,209,600 bytes peak RSS against the 52,428,800-byte budget.
 
+## Inline HiLog level filtering (2026-11-24)
+
+RED → GREEN slices:
+
+- `cargo test -p arklog --test session_store logcat_level_prefix` first failed:
+  `level:WARN` was treated as raw regex text and returned no rows. Added the
+  Android Studio Logcat minimum-severity prefix, sharing the existing parsed
+  HiLog Level field with rendering. The same test then passed for historical
+  records, incremental append, unknown levels, misleading message text, and
+  clearing the filter without losing raw records.
+- `cargo test -p arklog --test ui_input empty_filter` first failed because the
+  empty editor had no level syntax hint. Added a muted render-only placeholder
+  in the existing editor; the test then passed with the cursor at the empty
+  input position and no hint once the user types. No new keys or controls.
+- Public store, render, and application tests cover case-insensitive level
+  names, ASSERT/FATAL equivalence, standard/numbered/epoch HiLog layouts,
+  level AND regex, Find visibility, unchanged-query rebuild avoidance, Clear,
+  invalid-query recovery, literal `level:` regex text, regex-only highlighting,
+  history reuse, and Tab never inserting the render-only placeholder.
+
+Final verification: `pnpm test` and `cargo test --workspace` each passed all
+213 tests. `pnpm build`, `cargo check -p arklog`, formatting and diff checks
+passed. The initial sandboxed full-test attempt could not bind local MCP ports
+(`Operation not permitted`); both complete test commands passed with local
+port binding allowed.
+
+## Built-in level syntax completion (2026-11-24)
+
+- RED: `cargo test -p arklog --test state filter_suggests_level_syntax_without_history`
+  failed with `None` for `lev`; a fresh state had no syntax suggestions.
+- GREEN: added a static fallback for the seven supported level names behind
+  the existing history-prefix lookup. Public state tests prove first-use
+  completion, case-insensitive values, history priority, no history pollution,
+  and suppression for empty/selected/mid-cursor/regex/complete drafts.
+- Application tests exercise the existing Tab, undo and Enter dispatch: Tab
+  inserts only the preview, Enter does not implicitly accept it, and Find or
+  device overlays do not offer the built-in preview. No new keys or UI.
+
+Final verification: `pnpm test` and `cargo test --workspace` each passed all
+216 tests with local MCP port binding allowed. `pnpm build`,
+`cargo check -p arklog`, formatting and diff checks passed.
+
 ## v0.2.13 release verification (2026-11-22)
 
 Updated the public package-version regression to require 0.2.13 and observed

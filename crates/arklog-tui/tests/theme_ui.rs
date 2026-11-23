@@ -300,3 +300,28 @@ fn epoch_hilog_colors_only_the_parsed_level() {
         );
     }
 }
+
+#[test]
+fn level_filter_highlights_only_the_regex_suffix_and_keeps_the_level_color() {
+    let raw = "0 E level:WARN needle";
+    let mut state = ArkLogState::new().unwrap();
+    state.append_lines([raw]).unwrap();
+    state.apply_filter("level:WARN needle").unwrap();
+    let lines = state.visible_window(10).unwrap();
+    let terminal = render_hilog(&lines, state.active_filter(), "", None);
+    let buffer = terminal.backend().buffer();
+    let start = cell_index(buffer, raw);
+    assert_eq!(buffer.content()[start + 2].fg, Color::Rgb(243, 139, 168));
+    for offset in 4..15 {
+        assert_eq!(
+            buffer.content()[start + offset].fg,
+            Color::Rgb(205, 214, 244)
+        );
+        assert_eq!(buffer.content()[start + offset].bg, Color::Rgb(30, 30, 46));
+    }
+    let needle = cell_index(buffer, "needle");
+    assert_eq!(buffer.content()[needle].bg, Color::Rgb(249, 226, 175));
+
+    state.apply_filter("level:ERROR").unwrap();
+    assert!(state.active_filter().is_none());
+}

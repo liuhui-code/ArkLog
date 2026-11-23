@@ -278,7 +278,15 @@ fn render_query(frame: &mut Frame, area: Rect, view: &AppView<'_>) {
         }
     };
     if matches!(view.input_mode, InputMode::Filter | InputMode::Find) {
-        render_text_input(frame, area, title, view.input, tone);
+        let mut input = view.input;
+        if view.input_mode == InputMode::Filter
+            && view.overlay == OverlayMode::None
+            && view.tab == LogTab::HiLog
+            && input.text.is_empty()
+        {
+            input.suggestion = Some(theme::FILTER_INPUT_HINT);
+        }
+        render_text_input(frame, area, title, input, tone);
         return;
     }
     let error = view.action_error.or(view.filter_error);

@@ -12,6 +12,38 @@ use ratatui::{
 struct UnusedClipboard;
 
 #[test]
+fn empty_filter_shows_a_muted_level_hint_without_moving_the_cursor_or_entering_text() {
+    use ratatui::backend::Backend;
+    let input = TextInput::new("");
+    let mut terminal = render_input(input.view(), 110);
+    let cells = terminal.backend().buffer().content();
+    let hint = "Regex · level:WARN";
+    let start = cells
+        .windows(hint.chars().count())
+        .position(|cells| cells.iter().map(|cell| cell.symbol()).collect::<String>() == hint)
+        .expect("empty editor shows the level syntax");
+    assert!(cells[start..start + hint.chars().count()]
+        .iter()
+        .all(|cell| cell.fg == Color::Rgb(147, 153, 178)));
+    let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+    assert_eq!(
+        (cursor.x, cursor.y),
+        ((start % 110) as u16, (start / 110) as u16)
+    );
+    assert_eq!(input.text(), "");
+
+    let typed = render_input(TextInputView::at_end("timeout"), 110);
+    let rendered: String = typed
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(!rendered.contains(hint));
+}
+
+#[test]
 fn ghost_text_is_muted_and_keeps_the_cursor_at_the_real_input_end() {
     use ratatui::backend::Backend;
     let input = TextInput::new("err");

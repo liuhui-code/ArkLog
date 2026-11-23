@@ -6,6 +6,7 @@ mod execution_log;
 mod input_ui;
 mod keymap;
 mod log_geometry;
+mod log_level;
 mod mcp;
 mod mcp_runtime;
 mod memory;

@@ -36,6 +36,19 @@ without bound.
 7. A regular expression is case-insensitive by default and has explicit pattern
    and compiled-size limits. Invalid or over-budget expressions report an inline
    error and never mutate raw session data.
+   The existing filter editor also accepts one leading `level:<name>` term,
+   following Android Studio Logcat's minimum-severity semantics. Values are
+   case-insensitive: VERBOSE, DEBUG, INFO, WARN, ERROR, FATAL, and ASSERT (an alias
+   for HiLog FATAL). A whitespace separator introduces the remaining raw-line
+   Rust regex, which combines with the level threshold using AND. This is a
+   leading-level subset, not the full Logcat query language. An explicit level
+   excludes unrecognized levels; without it all raw lines still participate.
+   Filter and rendering share the same HiLog level-field parser. Only actual
+   regex matches receive filter highlighting. Escaped or grouped `level:` text
+   remains an ordinary regex. Invalid levels follow existing filter errors.
+   An empty Filter editor shows a muted `Regex · level:WARN` placeholder;
+   it disappears on typing and cannot be accepted with Tab or Enter. No new
+   controls, rows, or key bindings are added.
 8. Changing the expression re-indexes the complete current session. Appended
    lines are evaluated incrementally while the expression is unchanged.
 9. Find is case-insensitive literal search over regex-visible HiLog lines.
@@ -83,10 +96,10 @@ without bound.
     source record may occupy multiple display rows but retains one identity and
     count. Vertical scrolling, resize, Find, mode changes, and follow-latest use
     one `(record, source-cell)` content anchor and materialize only visible rows.
-21. ArkLog keeps the 50 most recent successfully applied non-empty regex
+21. ArkLog keeps the 50 most recent successfully applied non-empty filter
     source strings. Exact duplicates move to newest. Filter-editor Up/Down
     browse without applying and restore the draft past the newest item. Clear,
-    device replacement, and reconnect retain this input history. Only regex
+    device replacement, and reconnect retain this input history. Only complete filter
     source strings are atomically saved to the user's configuration directory
     after successful application and restored at startup; the restored history
     does not enable a filter. Input/file sizes are bounded, malformed files and
@@ -97,6 +110,14 @@ without bound.
     in muted text. Matching is literal and case-sensitive. Tab accepts the suffix
     as one undoable edit, without applying it. Enter applies only actual input.
     Find and device overlays do not show or accept these suggestions.
+    When history has no strict prefix match, the same preview/Tab path falls
+    back to built-in leading `level:` completions: WARN (the default), ERROR,
+    INFO, DEBUG, VERBOSE, FATAL, and ASSERT. It completes partial keys such as
+    `lev` and case-insensitive level values such as `level:wa`, preserving typed
+    characters. Empty drafts, mid-input cursors, selections, complete levels,
+    regex tails and non-leading/escaped syntax have no built-in completion.
+    Built-ins do not populate or persist history; only successfully applied
+    queries enter history. No candidate popup, extra key, or automatic apply.
 22. UTF-8 byte ranges, grapheme boundaries, and terminal cell columns remain
     distinct. Tabs expand only for display at a four-cell tab stop. Overflow
     and continuation markers never enter matching, storage, or raw copying.

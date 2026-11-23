@@ -1,5 +1,6 @@
 use crate::{
     log_geometry::{horizontal_slice, literal_match_ranges_in, wrapped_slices, VisibleGrapheme},
+    log_level::{log_level_field, LogLevel},
     theme,
 };
 use ratatui::text::{Line, Span};
@@ -121,7 +122,7 @@ fn regex_match_ranges_in(
 
 fn styled_graphemes(
     graphemes: Vec<VisibleGrapheme>,
-    level: Option<&(std::ops::Range<usize>, theme::LogLevel)>,
+    level: Option<&(std::ops::Range<usize>, LogLevel)>,
     filter_ranges: &[std::ops::Range<usize>],
     find_ranges: &[std::ops::Range<usize>],
     current_find: bool,
@@ -151,43 +152,4 @@ fn styled_graphemes(
 
 fn ranges_overlap(left: &std::ops::Range<usize>, right: &std::ops::Range<usize>) -> bool {
     left.start < right.end && right.start < left.end
-}
-
-fn log_level_field(raw: &str) -> Option<(std::ops::Range<usize>, theme::LogLevel)> {
-    let fields = raw
-        .split_whitespace()
-        .take(6)
-        .map(|field| {
-            let start = field.as_ptr() as usize - raw.as_ptr() as usize;
-            (start..start + field.len(), field)
-        })
-        .collect::<Vec<_>>();
-    let standard_start = usize::from(
-        fields.len() >= 6
-            && fields[0].1.parse::<u64>().is_ok()
-            && fields[1].1.contains('-')
-            && fields[2].1.contains(':'),
-    );
-    let candidate = if fields.len() >= standard_start + 5
-        && fields[standard_start].1.contains('-')
-        && fields[standard_start + 1].1.contains(':')
-        && fields[standard_start + 2].1.parse::<u64>().is_ok()
-        && fields[standard_start + 3].1.parse::<u64>().is_ok()
-    {
-        fields.get(standard_start + 4)
-    } else if fields.len() >= 4
-        && crate::agent_query::parse_epoch_millis(fields[0].1).is_some()
-        && fields[1].1.parse::<u64>().is_ok()
-        && fields[2].1.parse::<u64>().is_ok()
-    {
-        fields.get(3)
-    } else if fields
-        .first()
-        .is_some_and(|(_, field)| field.parse::<u64>().is_ok())
-    {
-        fields.get(1)
-    } else {
-        None
-    }?;
-    theme::LogLevel::parse(candidate.1).map(|level| (candidate.0.clone(), level))
 }
